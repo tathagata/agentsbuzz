@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# ./buzz  — start agentsbuzz. Run ./buzz help for the commands.
+# Uses Node 22.13+ if you have it (fastest: no build). Falls back to Docker.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+want_docker=0
+for a in "$@"; do [ "$a" = "--docker" ] && want_docker=1; done
+
+node_ok() {
+  command -v node >/dev/null 2>&1 && node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>22||(a===22&&b>=13)?0:1)'
+}
+
+if [ "$want_docker" -eq 0 ] && node_ok; then
+  exec node cli/launcher.js "$@"
+fi
+
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  [ "$want_docker" -eq 0 ] && echo "Node 22.13+ not found, using Docker instead."
+  args=()
+  for a in "$@"; do [ "$a" = "--docker" ] || args+=("$a"); done
+  exec bash up.sh ${args[@]+"${args[@]}"}
+fi
+
+echo "agentsbuzz needs Node 22.13+ (or Docker)." >&2
+case "$(uname -s)" in
+  Darwin) echo "  Install Node:  brew install node      (or https://nodejs.org)" >&2 ;;
+  *)      echo "  Install Node:  https://nodejs.org     (or your package manager)" >&2 ;;
+esac
+echo "  Then run:      ./buzz" >&2
+exit 1

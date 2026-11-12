@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e1621">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Buzz">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <title>agentsbuzz</title>
+</head>
+<body>
+  <header class="top">
+    <div class="bar">
+      <button id="back" class="icon-btn" type="button" aria-label="Back" hidden>&#8592;</button>
+      <h1 id="title">Projects</h1>
+      <span id="conn" class="conn" role="status" aria-label="connecting"></span>
+      <button id="quiet" class="toggle" type="button" aria-pressed="false" hidden>Quiet</button>
+      <button id="add" class="toggle" type="button" hidden>New project</button>
+      <button id="edit" class="toggle" type="button" hidden>Edit</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <div id="view"></div>
+    <div id="sentinel" class="sentinel"></div>
+  </main>
+
+  <button id="newpill" class="newpill" type="button" hidden></button>
+
+  <div id="scrim" class="scrim" hidden></div>
+  <div id="dock" class="dock">
+    <div id="tray" class="tray" role="menu" aria-label="Projects" hidden></div>
+    <button id="dockBtn" class="dock-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Switch project"></button>
+  </div>
+
+  <dialog id="auth">
+    <form method="dialog" id="authForm">
+      <p>This feed is token protected. Paste the value of <code>AGENTSBUZZ_TOKEN</code>.</p>
+      <input id="tokenInput" type="password" autocomplete="off" placeholder="Token" required>
+      <button type="submit">Connect</button>
+    </form>
+  </dialog>
+
+  <dialog id="projectDialog">
+    <form id="projectForm" method="dialog">
+      <h2 id="pdTitle">New project</h2>
+      <label>Name
+        <input id="pdName" required maxlength="80" autocomplete="off" placeholder="my-app">
+      </label>
+      <label>What is it for
+        <input id="pdDesc" maxlength="600" autocomplete="off" placeholder="One line on the goal">
+      </label>
+      <label>Stage
+        <select id="pdStatus">
+          <option value="idea">Idea</option>
+          <option value="active" selected>Active</option>
+          <option value="paused">Paused</option>
+          <option value="done">Done</option>
+        </select>
+      </label>
+      <label>Plan, one step per line
+        <textarea id="pdPlan" rows="6" placeholder="Prototype the core flow&#10;Get one real user to try it&#10;Decide: keep or stop"></textarea>
+      </label>
+      <p class="hint">Start a line with <code>[x]</code> for done or <code>[~]</code> for in progress.</p>
+      <div class="dlg-actions">
+        <button type="button" id="pdCancel" class="ghost">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

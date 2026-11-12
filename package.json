@@ -1,0 +1,18 @@
+{
+  "name": "agentsbuzz",
+  "version": "0.1.0",
+  "description": "A Twitter-like feed of what your coding agents are doing, across projects and harnesses.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "buzz": "cli/buzz.js"
+  },
+  "scripts": {
+    "start": "node server/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "license": "MIT"
+}

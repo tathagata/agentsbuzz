@@ -1,0 +1,257 @@
+name: CI
+
+on:
+  # Pushes to other branches are covered by their pull request; running both doubles every check.
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Catches newly disclosed CVEs in the container image and newly published advisories for the
+    # pinned actions, even when nothing in the repo has changed.
+    - cron: "23 4 * * 1"
+
+# Nothing by default; each job asks for exactly what it needs.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+# Every tool is pinned to an exact version. Actions are pinned to full commit SHAs (the comment
+# names the tag); Dependabot keeps both up to date. Downloaded binaries are checked against a
+# SHA-256 recorded here before they run.
+env:
+  ACTIONLINT_VERSION: v1.7.12
+  ZIZMOR_VERSION: 1.32.0
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+  GRYPE_VERSION: 0.121.3
+  GRYPE_SHA256: e9da18cc1429e786722e32161288103600efffd8e483c90761f90485bd1bec85
+
+jobs:
+  actionlint:
+    name: Lint workflow files
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - run: go run "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}" -color
+
+  zizmor:
+    name: Audit workflows for security issues (zizmor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Online audits too: impostor commits behind a pinned SHA, and actions with known advisories.
+      - run: pipx run "zizmor==${ZIZMOR_VERSION}" --format=github .
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  hadolint:
+    name: Lint Dockerfile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+          config: .hadolint.yaml
+
+  shell:
+    name: Syntax and shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.13.0
+      - name: Every JavaScript file parses
+        run: git ls-files '*.js' '*.mjs' '*.cjs' | xargs -n1 node --check
+      - name: shellcheck (preinstalled on the runner)
+        run: shellcheck buzz up.sh install.sh
+
+  secrets:
+    name: No secrets in the history (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks (checksum verified)
+        run: |
+          f="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$f" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$f"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP" gitleaks
+      - run: '"$RUNNER_TEMP/gitleaks" git --redact --no-banner --exit-code 1 .'
+
+  test:
+    name: Tests (${{ matrix.os }}, Node ${{ matrix.node }})
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # the oldest Node the app supports (package.json engines) and the current LTS
+        node: ["22.13.0", "24"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      # Includes test/supply-chain.test.js: no dependencies, every import is node: or relative.
+      - run: npm test
+
+  ui:
+    name: Browser checks (Content-Security-Policy, smooth feed)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # Test-only tooling with its own lockfile (exact versions and integrity hashes), no install
+      # scripts, and registry signatures checked. The app itself has no dependencies.
+      - name: Install Playwright from the lockfile
+        working-directory: test/browser
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm audit signatures
+          npx --no-install playwright install --with-deps chromium
+      - run: node test/ui.mjs
+        env:
+          NODE_PATH: ${{ github.workspace }}/test/browser/node_modules
+      - run: node test/smooth.mjs
+        env:
+          NODE_PATH: ${{ github.workspace }}/test/browser/node_modules
+
+  image:
+    name: Container image builds and has no fixable high or critical CVEs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: agentsbuzz:ci
+          provenance: false
+      - name: Install grype (checksum verified)
+        run: |
+          f="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$f" "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/$f"
+          echo "${GRYPE_SHA256}  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP" grype
+      # Fails on anything high or critical that has a fix available; unfixed base-image CVEs are reported, not blocking.
+      - run: '"$RUNNER_TEMP/grype" agentsbuzz:ci --only-fixed --fail-on high'
+
+  # The jobs below need GitHub Advanced Security (code scanning, the dependency graph API), which
+  # private repositories on the Free plan do not have: they fail with "Resource not accessible by
+  # integration" whatever `permissions:` says. Uncomment them when the repository goes public
+  # (the curl | bash installer in the README needs that anyway) or GHAS is enabled.
+  #
+  # codeql:
+  #   name: CodeQL
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 20
+  #   permissions:
+  #     contents: read
+  #     security-events: write
+  #     actions: read
+  #   steps:
+  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  #       with:
+  #         persist-credentials: false
+  #     - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+  #       with:
+  #         languages: javascript-typescript, actions
+  #         queries: security-extended
+  #     - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+  #
+  # dependency-review:
+  #   name: Dependency review
+  #   if: github.event_name == 'pull_request'
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 10
+  #   permissions:
+  #     contents: read
+  #   steps:
+  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  #       with:
+  #         persist-credentials: false
+  #     - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+  #       with:
+  #         fail-on-severity: moderate
+  #
+  # scorecard:
+  #   name: OpenSSF Scorecard
+  #   if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 10
+  #   permissions:
+  #     contents: read
+  #     security-events: write
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  #       with:
+  #         persist-credentials: false
+  #     - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+  #       with:
+  #         results_file: scorecard.sarif
+  #         results_format: sarif
+  #         publish_results: true
+  #     - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+  #       with:
+  #         sarif_file: scorecard.sarif

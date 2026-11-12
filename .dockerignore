@@ -1,0 +1,15 @@
+.git
+node_modules
+data
+*.db
+*.db-wal
+*.db-shm
+test
+cli
+hooks
+mcp
+README.md
+Dockerfile
+docker-compose.yml
+.env
+

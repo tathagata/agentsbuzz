@@ -1,0 +1,65 @@
+# Local deployment:  bash up.sh      (or: docker compose up -d --build)
+#
+# buzz       the feed server and web app
+# collector  finds your projects and follows what your agents do. It reads your folders
+#            read-only and only sends short summaries to the feed server.
+services:
+  buzz:
+    build: .
+    image: agentsbuzz:local
+    container_name: agentsbuzz
+    restart: unless-stopped
+    # Least privilege: no Linux capabilities, no way to gain privileges, and a read-only system;
+    # the server writes only to its /data volume.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      AGENTSBUZZ_TOKEN: "${AGENTSBUZZ_TOKEN:?Set AGENTSBUZZ_TOKEN before starting}"
+    ports:
+      # Loopback only by default. Put Tailscale (or another proxy) in front for your phone.
+      # Set BIND_ADDR=0.0.0.0 to reach it directly on your LAN.
+      - "${BIND_ADDR:-127.0.0.1}:${PORT:-7777}:7777"
+    volumes:
+      - buzz-data:/data
+
+  collector:
+    build: .
+    image: agentsbuzz:local
+    container_name: agentsbuzz-collector
+    restart: unless-stopped
+    # Runs as root only so it can read your files whatever their owner or mode; the mounts are read-only.
+    # Of root's powers it keeps only file access (DAC_OVERRIDE), and the only places it can write are
+    # its own /data volume and /tmp: the system is read-only and your folders are mounted read-only.
+    # It cannot change owners, load anything into the kernel, use the network specially, or gain more.
+    user: "0:0"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE]
+    read_only: true
+    tmpfs: [/tmp]
+    command: ["node", "collector/index.js"]
+    depends_on:
+      buzz:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    environment:
+      AGENTSBUZZ_URL: http://buzz:7777
+      AGENTSBUZZ_TOKEN: "${AGENTSBUZZ_TOKEN:?Set AGENTSBUZZ_TOKEN before starting}"
+      PROJECTS_DIR: /host/projects
+      HOST_PROJECTS: "${BUZZ_PROJECTS:-${HOME}/projects}"
+      CLAUDE_DIR: /host/claude
+      CODEX_DIR: /host/codex
+      STATE_FILE: /data/collector-state.json
+    volumes:
+      # Folders default to ./.empty when you do not have them, so a missing tool is simply ignored.
+      - "${BUZZ_PROJECTS:-${HOME}/projects}:/host/projects:ro"
+      - "${BUZZ_CLAUDE:-./.empty}:/host/claude:ro"
+      - "${BUZZ_CODEX:-./.empty}:/host/codex:ro"
+      - collector-data:/data
+
+volumes:
+  buzz-data:
+  collector-data:

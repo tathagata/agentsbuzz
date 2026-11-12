@@ -1,0 +1,4 @@
+# DL3008 asks for exact apt package versions. Debian's archive drops old versions, so exact pins
+# break rebuilds; the base image is pinned by digest instead, and the weekly CI scan reports CVEs.
+ignored:
+  - DL3008

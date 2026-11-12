@@ -1,0 +1,12 @@
+{
+  "name": "agentsbuzz",
+  "short_name": "Buzz",
+  "description": "A feed of what your coding agents are doing",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0e1621",
+  "theme_color": "#0e1621",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
