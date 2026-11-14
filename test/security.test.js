@@ -213,6 +213,19 @@ test('a working folder from a session file cannot name a folder that is not a re
   fs.mkdirSync(odd);
   fs.writeFileSync(path.join(odd, '.git'), 'gitdir: /etc\n');
   assert.equal(repoRoot(odd, { home }), fs.realpathSync(odd));
+  // a .git file claiming to be a worktree of some other repository is not followed into it...
+  const other = path.join(home, 'other');
+  execFileSync('git', ['init', '-q', other], { stdio: 'ignore' });
+  fs.mkdirSync(path.join(other, '.git', 'worktrees', 'fake'), { recursive: true });
+  const liar = path.join(home, 'liar');
+  fs.mkdirSync(liar);
+  fs.writeFileSync(path.join(liar, '.git'), `gitdir: ${path.join(other, '.git', 'worktrees', 'fake')}\n`);
+  assert.equal(repoRoot(liar, { home }), fs.realpathSync(liar));
+  // ...while a real worktree, linked both ways by git, folds into its repository
+  execFileSync('git', ['-C', other, '-c', 'user.email=a@example.invalid', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'x'], { stdio: 'ignore' });
+  const wt = path.join(home, 'wt');
+  execFileSync('git', ['-C', other, 'worktree', 'add', '-q', wt], { stdio: 'ignore' });
+  assert.equal(repoRoot(wt, { home }), fs.realpathSync(other));
 });
 
 test('a symlink to your home folder cannot make your home folder (a dotfiles repository) a project', () => {
