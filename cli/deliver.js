@@ -138,8 +138,11 @@ function sessionCwd(sid, project) {
   } catch {
     /* no state yet */
   }
-  const guess = projectDir(PROJECTS_DIR, project);
-  return guess && fs.existsSync(guess) ? guess : '';
+  for (const root of PROJECTS_DIR.split(path.delimiter).filter(Boolean)) {
+    const guess = projectDir(root, project);
+    if (guess && fs.existsSync(guess)) return guess;
+  }
+  return '';
 }
 
 const busy = new Set();

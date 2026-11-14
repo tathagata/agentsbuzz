@@ -1,20 +1,26 @@
 #!/usr/bin/env node
 // agentsbuzz collector: finds your projects and follows what your agents do, with no setup per project.
-//   - discovers git projects in PROJECTS_DIR and creates them
+//   - discovers git projects: every repository your agents worked in (from the Claude Code and Codex
+//     session files), the repositories in PROJECTS_DIR, and any you added with ./buzz add
 //   - posts new git commits
 //   - follows Claude Code and Codex session files and posts each finished turn
 import fs from 'node:fs';
 import path from 'node:path';
 import { post, putProject, getProjects } from '../lib/client.js';
-import { scanProjects } from '../lib/discover.js';
+import { scanProjects, describeRepo, agentRepos, repoRoot } from '../lib/discover.js';
 import { loadState, saveState } from './state.js';
 import { pollGit } from './git.js';
-import { Turns, listFiles, readNewLines, parseClaude, parseCodex } from './transcripts.js';
+import { Turns, listFiles, readNewLines, parseClaude, parseCodex, mapProject } from './transcripts.js';
 
 const env = process.env;
 const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
+// lists use the path separator, like PATH: /a/code:/b/work
+const list = (v) => String(v || '').split(path.delimiter).map((s) => s.trim()).filter(Boolean);
 const cfg = {
-  projectsDir: env.PROJECTS_DIR || '/host/projects',
+  projectsDirs: list(env.PROJECTS_DIR || '/host/projects'),
+  extraRepos: list(env.EXTRA_REPOS),
+  ignore: new Set(list(env.IGNORE_PROJECTS)),
+  discoverDays: num(env.DISCOVER_DAYS, 90),
   hostProjects: env.HOST_PROJECTS || env.PROJECTS_DIR || '/host/projects',
   claudeDir: env.CLAUDE_DIR || '/host/claude',
   codexDir: env.CODEX_DIR || '/host/codex',
@@ -44,9 +50,44 @@ const backfillFiles = new Set();
 const counted = new WeakSet();
 const historic = new Map(); // project -> history events already queued (keeps the per-project cap)
 
+const real = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+};
+const ignored = (name, dir) => cfg.ignore.has(name) || cfg.ignore.has(dir);
+
+// One name per repository folder, kept for good: the folder's own name, or parent-name when another
+// folder already has it (~/work/api and ~/oss/api become "api" and "oss-api").
+function nameFor(dir) {
+  if (state.names[dir]) return state.names[dir];
+  const taken = new Set(Object.values(state.names));
+  const base = path.basename(dir);
+  let name = base;
+  if (taken.has(name)) name = `${path.basename(path.dirname(dir))}-${base}`;
+  for (let i = 2; taken.has(name); i++) name = `${base}-${i}`;
+  state.names[dir] = name;
+  dirty = true;
+  return name;
+}
+
+// A session belongs to the repository it ran in, wherever that is: a session in ~/work/api/src
+// is "api", not "src". Folders that are not in a repository keep the old rule (the folder name).
+function projectForCwd(cwd) {
+  const root = repoRoot(cwd);
+  if (!root) return mapProject(cwd, cfg.hostProjects);
+  const dir = real(root);
+  const name = nameFor(dir);
+  if (ignored(name, dir)) return '';
+  if (!repos.some((r) => r.dir === dir)) repos.push({ name, dir }); // follow its commits right away
+  return name;
+}
+
 const turns = {
-  claude: new Turns({ harness: 'claude-code', agent: 'claude', hostProjects: cfg.hostProjects, quietMs: cfg.quietMs, outbox }),
-  codex: new Turns({ harness: 'codex', agent: 'codex', hostProjects: cfg.hostProjects, quietMs: cfg.quietMs, outbox }),
+  claude: new Turns({ harness: 'claude-code', agent: 'claude', hostProjects: cfg.hostProjects, quietMs: cfg.quietMs, outbox, resolve: projectForCwd }),
+  codex: new Turns({ harness: 'codex', agent: 'codex', hostProjects: cfg.hostProjects, quietMs: cfg.quietMs, outbox, resolve: projectForCwd }),
 };
 
 function releaseBackfill() {
@@ -112,27 +153,49 @@ async function flushOutbox() {
 // ---- projects ----
 async function discover() {
   if (!cfg.on('COLLECT_PROJECTS')) return;
-  const found = scanProjects(cfg.projectsDir);
-  repos = found.map((f) => ({ name: f.name, dir: f.dir }));
   let existing;
   try {
-    existing = new Set((await getProjects()).map((p) => p.name));
+    existing = new Map((await getProjects()).map((p) => [p.name, p]));
   } catch (e) {
     log(`waiting for the server (${e.message})`);
     return;
   }
+  // Every source, each repository once. Folders first, so their names win for repositories that
+  // were already in the feed before agent history was used.
+  const found = new Map(); // dir -> { name, dir, from, info? }
+  const add = (dir, from, info) => {
+    const d = real(dir);
+    if (found.has(d)) return;
+    const name = nameFor(d);
+    if (!ignored(name, d)) found.set(d, { name, dir: d, from, info });
+  };
+  for (const root of cfg.projectsDirs) for (const f of scanProjects(root)) add(f.dir, 'folder', f);
+  for (const d of cfg.extraRepos) {
+    const r = repoRoot(path.resolve(d)) || (fs.existsSync(path.join(d, '.git')) ? d : '');
+    if (r) add(r, 'added');
+  }
+  if (cfg.on('DISCOVER_FROM_AGENTS')) {
+    for (const r of agentRepos({ claudeDir: cfg.claudeDir, codexDir: cfg.codexDir, days: cfg.discoverDays })) add(r, 'agents');
+  }
+  repos = [...found.values()].map(({ name, dir }) => ({ name, dir }));
+
   let added = 0;
-  for (const f of found) {
-    if (existing.has(f.name)) continue;
+  for (const f of found.values()) {
+    const have = existing.get(f.name);
+    if (have?.description) continue;
+    const info = f.info || describeRepo(f.dir, f.name);
     try {
-      await putProject(f.name, { description: f.description, status: f.status }, { timeoutMs: 8000 });
-      added += 1;
+      await putProject(f.name, have ? { description: info.description } : { description: info.description, status: info.status }, { timeoutMs: 8000 });
+      if (!have) added += 1;
     } catch (e) {
       log(`could not add ${f.name}: ${e.message}`);
     }
   }
   if (added) log(`added ${added} new project${added === 1 ? '' : 's'}`);
-  else if (!initialScanDone) log(`watching ${found.length} project${found.length === 1 ? '' : 's'} in ${cfg.projectsDir}`);
+  else if (!initialScanDone) {
+    const by = (k) => [...found.values()].filter((f) => f.from === k).length;
+    log(`watching ${found.size} project${found.size === 1 ? '' : 's'}: ${by('folder')} in ${cfg.projectsDirs.join(', ')}, ${by('agents')} more from agent history, ${by('added')} added by hand`);
+  }
 }
 
 // Release the held first-run history once every file is read and git has had its first pass.

@@ -134,6 +134,41 @@ test('follow on starts a follower, restart keeps it, follow off stops it', async
   assert.equal(alive(second), false);
 });
 
+test('add follows a repo outside the projects folder, projects shows the sources, remove stops following it', async () => {
+  const solo = path.join(home, 'elsewhere', 'solo');
+  fs.mkdirSync(solo, { recursive: true });
+  sh(solo, 'init', '-q', '-b', 'main');
+  sh(solo, 'config', 'user.email', 'a@b.c');
+  sh(solo, 'config', 'user.name', 'T');
+  fs.writeFileSync(path.join(solo, 'README.md'), '# solo\n\nThe solo project.\n');
+  sh(solo, 'add', '-A');
+  sh(solo, 'commit', '-q', '-m', 'First commit of solo');
+  fs.mkdirSync(path.join(solo, 'src'));
+  const added = await new Promise((resolve) => {
+    // run from a subfolder with no path: the repository it is in is added
+    const p = spawn(path.join(root, 'buzz'), ['add'], { env, cwd: path.join(solo, 'src') });
+    let out = '';
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (out += d));
+    p.on('close', (code) => resolve({ code, out }));
+  });
+  assert.equal(added.code, 0, added.out);
+  assert.match(added.out, /Following ~\/elsewhere\/solo/);
+  const cfg = JSON.parse(fs.readFileSync(path.join(home, '.agentsbuzz', 'config.json'), 'utf8'));
+  const projects = async () => (await (await fetch(`http://127.0.0.1:${cfg.port}/api/projects`, { headers: { authorization: `Bearer ${cfg.token}` } })).json()).projects;
+  const end = Date.now() + 15000;
+  while (!(await projects()).some((p) => p.name === 'solo') && Date.now() < end) await new Promise((r) => setTimeout(r, 200));
+  assert.ok((await projects()).some((p) => p.name === 'solo'), 'solo is in the feed');
+  const src = await buzz('projects');
+  assert.match(src.out, /Folder\s+~\/code \(2 repos\)/);
+  assert.match(src.out, /Added\s+~\/elsewhere\/solo/);
+  const rm = await buzz('remove', 'solo');
+  assert.match(rm.out, /Stopped following solo/);
+  assert.match((await buzz('projects')).out, /Not followed\s+solo/);
+  const bad = await buzz('add', path.join(home, 'elsewhere', 'solo', 'nope'));
+  assert.notEqual(bad.code, 0);
+});
+
 test('stop stops, and the data is kept', async () => {
   const r = await buzz('stop');
   assert.match(r.out, /Stopped/);

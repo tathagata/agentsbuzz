@@ -1,13 +1,14 @@
 // Security properties of the server and the wake service. Each test names the attack it stops.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { safeSessionId, projectDir } from '../cli/deliver.js';
+import { agentRepos, describeRepo, git, repoRoot } from '../lib/discover.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'buzzs-'));
@@ -170,6 +171,47 @@ test('a project name cannot point the agent at a folder outside your projects', 
   assert.equal(projectDir(r, 'alpha'), path.join(r, 'alpha'));
   for (const bad of ['..', '.', '../..', '../etc', 'a/b', 'a\\b', '/etc', '', 'x\0y']) assert.equal(projectDir(r, bad), '', JSON.stringify(bad));
   assert.equal(projectDir('', 'alpha'), '');
+});
+
+test('a session file pointing at a hostile repository cannot make agentsbuzz run its programs', () => {
+  // a repository whose own config would run a program on many git commands
+  const home = fs.mkdtempSync(path.join(tmp, 'home-'));
+  const evil = path.join(home, 'cloned', 'evil');
+  fs.mkdirSync(evil, { recursive: true });
+  const g = (...a) => execFileSync('git', a, { cwd: evil, stdio: 'ignore' });
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.email', 'a@example.invalid');
+  g('config', 'user.name', 'T');
+  fs.writeFileSync(path.join(evil, 'f'), 'x');
+  g('add', '-A');
+  g('commit', '-q', '-m', 'x');
+  const marker = path.join(home, 'ran');
+  const script = path.join(home, 'payload.sh');
+  fs.writeFileSync(script, `#!/bin/sh\ntouch "${marker}"\n`, { mode: 0o755 });
+  g('config', 'core.fsmonitor', script);
+  g('config', 'core.pager', script);
+  fs.writeFileSync(path.join(evil, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch "${marker}"\n`, { mode: 0o755 });
+  // a Claude Code session that ran there
+  const claudeDir = path.join(home, '.claude');
+  fs.mkdirSync(path.join(claudeDir, 'projects', '-evil'), { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'projects', '-evil', 's.jsonl'), `${JSON.stringify({ type: 'user', cwd: evil, sessionId: 's' })}\n`);
+  const found = agentRepos({ claudeDir, home });
+  assert.deepEqual(found, [evil]);
+  describeRepo(found[0]);
+  git(found[0], 'status'); // plain git status runs core.fsmonitor; this must not
+  assert.equal(fs.existsSync(marker), false, 'reading the repository ran one of its programs');
+});
+
+test('a working folder from a session file cannot name a folder that is not a repository', () => {
+  const home = fs.mkdtempSync(path.join(tmp, 'home-'));
+  const plain = path.join(home, 'notes', 'sub');
+  fs.mkdirSync(plain, { recursive: true });
+  for (const bad of ['', 'relative/path', '../..', 'x\0y', null, 42, {}, home, plain, path.parse(home).root]) assert.equal(repoRoot(bad, { home }), '', JSON.stringify(bad));
+  // a .git file that points somewhere else is only read as a path, and only a real worktree folds into its repository
+  const odd = path.join(home, 'odd');
+  fs.mkdirSync(odd);
+  fs.writeFileSync(path.join(odd, '.git'), 'gitdir: /etc\n');
+  assert.equal(repoRoot(odd, { home }), odd);
 });
 
 test('the wake service refuses to run agents for a server without a token', async () => {

@@ -4,6 +4,8 @@
 //   buzz              start (finds your projects, loads their history, opens the feed)
 //   buzz phone        put it on your phone: QR code over Tailscale (or --lan for the same Wi-Fi)
 //   buzz connect      let your agents read the messages you leave (asks before changing anything)
+//   buzz add|remove   follow a repository (or a folder of them) your agents have not worked in yet, or stop following one
+//   buzz projects     where projects come from
 //   buzz status|stop|logs|open
 //   buzz autostart    start on login (macOS launchd or Linux systemd --user)
 import { spawn, spawnSync } from 'node:child_process';
@@ -15,6 +17,7 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { terminalQR } from '../lib/qr.js';
+import { agentRepos, repoRoot } from '../lib/discover.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = os.homedir();
@@ -37,7 +40,17 @@ const opt = (n) => {
 };
 const tty = process.stdin.isTTY && process.stdout.isTTY;
 
-const tilde = (p) => (p.startsWith(HOME) ? `~${p.slice(HOME.length)}` : p);
+const HOME_REAL = (() => {
+  try {
+    return fs.realpathSync(HOME);
+  } catch {
+    return HOME;
+  }
+})();
+const tilde = (p) => {
+  for (const h of [HOME, HOME_REAL]) if (p === h || p.startsWith(`${h}/`)) return `~${p.slice(h.length)}`;
+  return p;
+};
 const say = (s = '') => console.log(s);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const dim = (s) => (process.stdout.isTTY ? `\x1b[2m${s}\x1b[0m` : s);
@@ -76,26 +89,56 @@ const alive = (pid) => {
 };
 
 // ---------- finding things ----------
+// Repositories in a folder: its children, and one level further down for grouping folders that
+// are not repositories themselves (~/code/<org>/<repo>). Same rule as the collector's scan.
 function repoCount(dir) {
-  try {
-    return fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('.') && fs.existsSync(path.join(dir, d.name, '.git'))).length;
-  } catch {
-    return 0;
+  const kids = (d) => {
+    try {
+      return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules').map((e) => path.join(d, e.name));
+    } catch {
+      return [];
+    }
+  };
+  let n = 0;
+  for (const k of kids(dir)) {
+    if (fs.existsSync(path.join(k, '.git'))) n += 1;
+    else n += kids(k).filter((g) => fs.existsSync(path.join(g, '.git'))).length;
   }
+  return n;
+}
+// paths you type are relative to where you ran ./buzz (the wrapper script changes folder first)
+const CALLER = process.env.BUZZ_CALLER_DIR || process.cwd();
+const expand = (p) => path.resolve(CALLER, p.replace(/^~(?=$|\/)/, HOME));
+const realOf = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+};
+const within = (child, dir) => child === dir || child.startsWith(`${dir}${path.sep}`);
+
+// Where do your projects live? Projects mostly come from your agent history (every repository a
+// Claude Code or Codex session ran in), so folders are for repositories no agent has touched yet:
+// every usual folder that has repositories, or exactly the ones you named with --projects a,b.
+function detectProjectsDirs(cfg) {
+  const given = opt('projects') || process.env.BUZZ_PROJECTS;
+  if (given) return given.split(',').map((s) => s.trim()).filter(Boolean).map(expand);
+  const saved = (cfg.projectsDirs || (cfg.projectsDir ? [cfg.projectsDir] : [])).filter((d) => fs.existsSync(d));
+  if (saved.length) return saved;
+  const guesses = [path.dirname(ROOT), 'projects', 'code', 'dev', 'src', 'Developer', 'repos', 'work', 'workspace', 'github', 'git', 'Documents/GitHub'].map((p) => (path.isAbsolute(p) ? p : path.join(HOME, p)));
+  const found = [];
+  for (const dir of guesses) {
+    if (realOf(dir) === realOf(HOME) || !repoCount(dir)) continue;
+    if (!found.some((f) => realOf(f) === realOf(dir))) found.push(dir);
+  }
+  return found.length ? found : [path.dirname(ROOT)];
 }
 
-// Where do your projects live? The folder this was cloned into is the strongest hint.
-function detectProjectsDir(cfg) {
-  const given = opt('projects') || process.env.BUZZ_PROJECTS;
-  if (given) return path.resolve(given.replace(/^~/, HOME));
-  if (cfg.projectsDir && fs.existsSync(cfg.projectsDir)) return cfg.projectsDir;
-  const guesses = [path.dirname(ROOT), 'projects', 'code', 'dev', 'src', 'Developer', 'repos', 'work', 'workspace', 'github', 'git', 'Documents/GitHub'].map((p) => (path.isAbsolute(p) ? p : path.join(HOME, p)));
-  let best = null;
-  for (const dir of guesses) {
-    const n = repoCount(dir);
-    if (n > 0 && (!best || n > best.n)) best = { dir, n };
-  }
-  return best ? best.dir : path.dirname(ROOT);
+// Repositories your agents worked in that no watched folder already covers.
+function agentOnlyRepos(cfg) {
+  const dirs = (cfg.projectsDirs || []).map(realOf);
+  return agentRepos({ claudeDir: path.join(HOME, '.claude'), codexDir: path.join(HOME, '.codex') }).map(realOf).filter((r) => !dirs.some((d) => within(r, d)));
 }
 
 const exists = (p) => {
@@ -230,7 +273,8 @@ async function start({ announce = true } = {}) {
   // a stale half-run? clean it
   await stop({ quiet: true });
   cfg.port = await pickPort(cfg);
-  cfg.projectsDir = detectProjectsDir(cfg);
+  cfg.projectsDirs = detectProjectsDirs(cfg);
+  cfg.projectsDir = cfg.projectsDirs[0];
   const host = cfg.lan ? '0.0.0.0' : '127.0.0.1';
   saveConfig(cfg);
 
@@ -251,8 +295,10 @@ async function start({ announce = true } = {}) {
     {
       AGENTSBUZZ_URL: `http://127.0.0.1:${cfg.port}`,
       AGENTSBUZZ_TOKEN: cfg.token,
-      PROJECTS_DIR: cfg.projectsDir,
+      PROJECTS_DIR: cfg.projectsDirs.join(path.delimiter),
       HOST_PROJECTS: cfg.projectsDir,
+      EXTRA_REPOS: (cfg.repos || []).join(path.delimiter),
+      IGNORE_PROJECTS: (cfg.ignore || []).join(path.delimiter),
       CLAUDE_DIR: claudeDir,
       CODEX_DIR: codexDir,
       STATE_FILE: F.state,
@@ -263,7 +309,7 @@ async function start({ announce = true } = {}) {
   if (cfg.wake) {
     delivererPid = spawnService(
       'cli/deliver.js',
-      { AGENTSBUZZ_URL: `http://127.0.0.1:${cfg.port}`, AGENTSBUZZ_TOKEN: cfg.token, PROJECTS_DIR: cfg.projectsDir, STATE_FILE: F.state },
+      { AGENTSBUZZ_URL: `http://127.0.0.1:${cfg.port}`, AGENTSBUZZ_TOKEN: cfg.token, PROJECTS_DIR: cfg.projectsDirs.join(path.delimiter), STATE_FILE: F.state },
       path.join(DIR, 'wake.log')
     );
   }
@@ -295,7 +341,7 @@ async function start({ announce = true } = {}) {
     } catch {
       /* server busy loading; try again */
     }
-    if (!projects && Date.now() - t0 > 12000 && !repoCount(cfg.projectsDir)) break; // nothing to find
+    if (!projects && Date.now() - t0 > 12000 && !cfg.projectsDirs.some(repoCount) && !agentOnlyRepos(cfg).length) break; // nothing to find
   }
   if (announce) say('');
   cfg.last = { projects, events };
@@ -304,8 +350,10 @@ async function start({ announce = true } = {}) {
 
 function describeSources(cfg) {
   const bits = [];
-  const n = repoCount(cfg.projectsDir);
-  bits.push(`${tilde(cfg.projectsDir)} (${n} repo${n === 1 ? '' : 's'})`);
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  for (const d of cfg.projectsDirs || [cfg.projectsDir]) bits.push(`${tilde(d)} (${plural(repoCount(d), 'repo')})`);
+  const more = agentOnlyRepos(cfg).length + (cfg.repos || []).length;
+  if (more) bits.push(`${plural(more, 'more repo')} from your agent history and ./buzz add`);
   if (exists(path.join(HOME, '.claude'))) bits.push('Claude Code');
   if (exists(path.join(HOME, '.codex'))) bits.push('Codex');
   return bits.join(' · ');
@@ -583,6 +631,70 @@ async function status() {
   say(dim(`Data and logs in ${tilde(DIR)}`));
 }
 
+// ---------- where projects come from ----------
+// Projects are found on their own: every repository a Claude Code or Codex session ran in, plus the
+// repositories in your projects folders. These are for the rest.
+async function applyIfRunning(cfg) {
+  saveConfig(cfg);
+  if (await running(cfg)) {
+    await stop({ quiet: true });
+    await start({ announce: false });
+  }
+}
+
+async function addProject() {
+  const target = expand(args[1] && !args[1].startsWith('-') ? args[1] : CALLER);
+  if (!exists(target)) die(`${tilde(target)} is not a folder.`);
+  const cfg = loadConfig();
+  const repo = fs.existsSync(path.join(target, '.git')) ? repoRoot(target, { home: path.parse(target).root }) || target : repoRoot(target);
+  const name = path.basename(repo || target);
+  cfg.ignore = (cfg.ignore || []).filter((x) => x !== name && x !== realOf(repo || target));
+  if (repo) {
+    const dir = realOf(repo);
+    cfg.repos = [...new Set([...(cfg.repos || []), dir])];
+    await applyIfRunning(cfg);
+    ok(`Following ${tilde(dir)}. It shows up in the feed within a few seconds.`);
+  } else if (repoCount(target)) {
+    const dir = realOf(target);
+    cfg.projectsDirs = [...new Set([...(cfg.projectsDirs || (cfg.projectsDir ? [cfg.projectsDir] : [])), dir])];
+    await applyIfRunning(cfg);
+    ok(`Watching ${tilde(dir)} (${repoCount(dir)} repos). New repositories in it appear on their own.`);
+  } else die(`${tilde(target)} is not a git repository and has none inside it.`);
+}
+
+async function removeProject() {
+  const what = args[1];
+  if (!what || what.startsWith('-')) die('Say which project: ./buzz remove NAME (or a path).');
+  const cfg = loadConfig();
+  const asPath = exists(expand(what)) ? realOf(expand(what)) : '';
+  const name = asPath ? path.basename(asPath) : what;
+  const dirs = cfg.projectsDirs || [];
+  if (asPath && dirs.map(realOf).includes(asPath)) {
+    cfg.projectsDirs = dirs.filter((d) => realOf(d) !== asPath);
+    await applyIfRunning(cfg);
+    return ok(`No longer watching the folder ${tilde(asPath)}. Repositories your agents work in are still followed.`);
+  }
+  cfg.repos = (cfg.repos || []).filter((r) => r !== asPath && path.basename(r) !== name);
+  cfg.ignore = [...new Set([...(cfg.ignore || []), name, ...(asPath ? [asPath] : [])])];
+  await applyIfRunning(cfg);
+  ok(`Stopped following ${name}. Its past posts stay in the feed. Undo with ./buzz add ${asPath ? tilde(asPath) : 'PATH'}`);
+}
+
+function sources() {
+  const cfg = loadConfig();
+  cfg.projectsDirs = detectProjectsDirs(cfg);
+  const fromAgents = agentOnlyRepos(cfg);
+  say(bold('Where projects come from'));
+  say(`  Agent history   ${fromAgents.length} repos your Claude Code and Codex sessions ran in, outside the folders below`);
+  for (const r of fromAgents.slice(0, 12)) say(dim(`                  ${tilde(r)}`));
+  if (fromAgents.length > 12) say(dim(`                  and ${fromAgents.length - 12} more`));
+  for (const d of cfg.projectsDirs) say(`  Folder          ${tilde(d)} (${repoCount(d)} repos)`);
+  for (const r of cfg.repos || []) say(`  Added           ${tilde(r)}`);
+  for (const x of cfg.ignore || []) say(`  Not followed    ${x.includes(path.sep) ? tilde(x) : x}`);
+  say('');
+  say(dim('  ./buzz add [PATH] follows a repo or a folder of repos · ./buzz remove NAME stops following one'));
+}
+
 function logs() {
   spawn('tail', ['-n', '40', '-f', F.serverLog, F.collectorLog], { stdio: 'inherit' });
 }
@@ -640,6 +752,9 @@ function help() {
   ./buzz              start it, load your projects and history, open the feed
   ./buzz phone        QR code for your phone over Tailscale (--lan for the same Wi-Fi)
   ./buzz connect      let agents read the messages you leave (asks first)
+  ./buzz add [PATH]   follow a repo (or a folder of repos) no agent has worked in yet
+  ./buzz remove NAME  stop following a project (its past posts stay)
+  ./buzz projects     where projects come from
   ./buzz wake on      also wake idle agents so a message is acted on right away
   ./buzz follow on    redeploy here whenever main changes on GitHub (tested first)
   ./buzz restart      restart on the code in this folder
@@ -649,7 +764,7 @@ function help() {
   ./buzz logs         follow the logs
   ./buzz autostart    start on login (use "autostart off" to undo)
 
-  Options: --projects DIR   --port N   --no-open
+  Options: --projects DIR[,DIR]   --port N   --no-open
   Docker instead: ./buzz --docker   (or bash up.sh)`);
 }
 
@@ -669,6 +784,9 @@ try {
     }
   } else if (cmd === 'phone') await phone();
   else if (cmd === 'connect') await connect();
+  else if (cmd === 'add') await addProject();
+  else if (cmd === 'remove') await removeProject();
+  else if (cmd === 'projects') sources();
   else if (cmd === 'wake') await wake();
   else if (cmd === 'follow') await follow();
   else if (cmd === 'restart') await restart();

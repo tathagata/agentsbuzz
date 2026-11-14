@@ -115,14 +115,16 @@ export function parseCodex(obj, st) {
 
 // ---- turns: remember the latest agent text per session and post it once the turn is over ----
 export class Turns {
-  constructor({ harness, agent, hostProjects, quietMs, outbox }) {
+  // resolve(cwd) names the project a session belongs to; without one, the folder layout decides
+  constructor({ harness, agent, hostProjects, quietMs, outbox, resolve }) {
     Object.assign(this, { harness, agent, hostProjects, quietMs, outbox });
+    this.resolve = resolve || ((cwd) => mapProject(cwd, hostProjects));
     this.sessions = new Map();
   }
 
   add(st, file, item, { announce }) {
     const sessionId = st.session || path.basename(file, '.jsonl').slice(-36);
-    const project = mapProject(st.cwd, this.hostProjects);
+    const project = st.cwd ? this.resolve(st.cwd) : '';
     if (!project) return;
     let s = this.sessions.get(sessionId);
     if (!s) {
