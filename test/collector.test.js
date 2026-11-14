@@ -6,6 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { toLocal } from '../collector/transcripts.js';
+import { repoRoot } from '../lib/discover.js';
+
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 19000 + Math.floor(Math.random() * 900);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -34,8 +37,8 @@ async function waitFor(fn, what, ms = 15000) {
 const events = async (q = '') => (await get(`/api/events?limit=200${q}`)).events;
 const sh = (cwd, ...a) => execFileSync('git', a, { cwd, stdio: 'ignore' });
 
-function repo(name, withReadme = true) {
-  const dir = path.join(projects, name);
+function repo(name, withReadme = true, parent = projects) {
+  const dir = path.join(parent, name);
   fs.mkdirSync(dir, { recursive: true });
   sh(dir, 'init', '-q', '-b', 'main');
   sh(dir, 'config', 'user.email', 'a@b.c');
@@ -57,6 +60,10 @@ before(async () => {
   const alpha = repo('alpha');
   fs.mkdirSync(path.join(projects, 'notes-not-git'), { recursive: true });
   globalThis.alphaDir = alpha;
+  // a grouping folder inside the projects folder: ~/projects/acme/delta
+  repo('delta', true, path.join(projects, 'acme'));
+  // a repository outside every watched folder, added by hand (./buzz add)
+  repo('zeta', true, path.join(tmp, 'manual'));
 
   // history that existed before the collector ever ran
   const hist = repo('hist');
@@ -95,6 +102,8 @@ before(async () => {
       CLAUDE_DIR: claude,
       CODEX_DIR: codex,
       STATE_FILE: path.join(tmp, 'state.json'),
+      EXTRA_REPOS: path.join(tmp, 'manual', 'zeta'),
+      IGNORE_PROJECTS: 'hidden',
       POLL_MS: '200',
       GIT_POLL_MS: '300',
       DISCOVER_MS: '600',
@@ -190,6 +199,46 @@ test('Codex session maps worktrees to the project and posts on task completion',
   assert.equal(ev.session_id, 'cx-1');
 });
 
+test('a repository outside the projects folder is found from agent history, named after the repo, not the subfolder', async () => {
+  const omega = repo('omega', true, path.join(tmp, 'elsewhere'));
+  fs.mkdirSync(path.join(omega, 'src'), { recursive: true });
+  const dir = path.join(claude, 'projects', '-x-elsewhere-omega-src');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'om.jsonl'), assistant(path.join(omega, 'src'), 'omega-1', 'Omega parser is done.', 'end_turn'));
+  const turn = await waitFor(async () => (await events()).find((e) => e.summary.includes('Omega parser is done')), 'omega turn');
+  assert.equal(turn.project, 'omega', 'a session in repo/src belongs to the repo');
+  const p = await waitFor(async () => (await get('/api/projects')).projects.find((x) => x.name === 'omega' && x.description), 'omega described');
+  assert.match(p.description, /project called omega/);
+  // and its commits are followed, though it is in no watched folder
+  await waitFor(async () => (await events('&project=omega')).find((e) => e.harness === 'git' && e.summary === 'Initial commit'), 'omega commit');
+});
+
+test('two repositories with the same name stay two projects', async () => {
+  const other = repo('alpha', true, path.join(tmp, 'team'));
+  const dir = path.join(claude, 'projects', '-x-team-alpha');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'ta.jsonl'), assistant(other, 'team-alpha-1', 'Team alpha shipped.', 'end_turn'));
+  const turn = await waitFor(async () => (await events()).find((e) => e.summary.includes('Team alpha shipped')), 'team alpha turn');
+  assert.equal(turn.project, 'team-alpha');
+  assert.ok(!(await events('&project=alpha')).some((e) => e.summary.includes('Team alpha shipped')));
+});
+
+test('repositories in a grouping folder, and ones added by hand, are found', async () => {
+  await waitFor(async () => (await get('/api/projects')).projects.find((x) => x.name === 'delta'), 'nested delta');
+  await waitFor(async () => (await get('/api/projects')).projects.find((x) => x.name === 'zeta'), 'added zeta');
+});
+
+test('a project you stopped following gets no new posts', async () => {
+  const hidden = repo('hidden', true, path.join(tmp, 'elsewhere'));
+  const dir = path.join(claude, 'projects', '-x-elsewhere-hidden');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'h.jsonl'), assistant(hidden, 'hidden-1', 'Hidden work.', 'end_turn') + assistant(globalThis.alphaDir, 'marker-1', 'Marker after hidden.', 'end_turn'));
+  await waitFor(async () => (await events()).find((e) => e.summary.includes('Marker after hidden')), 'marker');
+  await sleep(1500);
+  assert.ok(!(await events()).some((e) => e.summary.includes('Hidden work') || e.project === 'hidden'));
+  assert.ok(!(await get('/api/projects')).projects.some((x) => x.name === 'hidden'));
+});
+
 test('a session line bigger than the read chunk does not stall the collector', async () => {
   const dir = path.join(claude, 'projects', '-x-alpha');
   fs.mkdirSync(dir, { recursive: true });
@@ -198,12 +247,24 @@ test('a session line bigger than the read chunk does not stall the collector', a
   await waitFor(async () => (await events('&project=alpha')).find((e) => e.summary.includes('Survived the giant line')), 'turn after a giant line', 20000);
 });
 
+test('in Docker, a session path from the host finds the repository in the mounted folder, even in a grouping folder', () => {
+  // the session recorded the host path; the container sees the same folder as PROJECTS_DIR
+  const host = '/home/someone/projects';
+  fs.mkdirSync(path.join(projects, 'acme', 'delta', 'src'), { recursive: true });
+  const local = toLocal(`${host}/acme/delta/src`, host, projects);
+  assert.equal(local, path.join(projects, 'acme', 'delta', 'src'));
+  assert.equal(repoRoot(local, { home: tmp }), fs.realpathSync(path.join(projects, 'acme', 'delta')));
+  // only paths under the host folder are translated, and not on the host itself
+  assert.equal(toLocal('/home/someone/projectsX/a', host, projects), '/home/someone/projectsX/a');
+  assert.equal(toLocal(`${projects}/alpha`, projects, projects), `${projects}/alpha`);
+});
+
 test('survives a restart without re-posting old turns', async () => {
   const before = (await events()).length;
   collector.kill();
   await sleep(300);
   collector = spawn('node', [path.join(root, 'collector/index.js')], {
-    env: { ...baseEnv, HOME: tmp, AGENTSBUZZ_URL: BASE, PROJECTS_DIR: projects, HOST_PROJECTS: projects, CLAUDE_DIR: claude, CODEX_DIR: codex, STATE_FILE: path.join(tmp, 'state.json'), POLL_MS: '200', GIT_POLL_MS: '300', DISCOVER_MS: '600', QUIET_MS: '700' },
+    env: { ...baseEnv, HOME: tmp, AGENTSBUZZ_URL: BASE, PROJECTS_DIR: projects, HOST_PROJECTS: projects, CLAUDE_DIR: claude, CODEX_DIR: codex, STATE_FILE: path.join(tmp, 'state.json'), EXTRA_REPOS: path.join(tmp, 'manual', 'zeta'), IGNORE_PROJECTS: 'hidden', POLL_MS: '200', GIT_POLL_MS: '300', DISCOVER_MS: '600', QUIET_MS: '700' },
     stdio: 'ignore',
   });
   await sleep(2500);

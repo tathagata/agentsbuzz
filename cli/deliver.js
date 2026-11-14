@@ -20,7 +20,7 @@ const env = process.env;
 const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
 const POLL_MS = num(env.AGENTSBUZZ_WAKE_POLL_MS, 4000);
 const IDLE_MS = num(env.AGENTSBUZZ_WAKE_IDLE_MS, 90 * 1000); // no activity for this long counts as idle
-const RUN_LIMIT_MS = num(env.AGENTSBUZZ_WAKE_RUN_LIMIT_MS, 20 * 60 * 1000);
+const RUN_LIMIT_MS = num(env.AGENTSBUZZ_WAKE_RUN_LIMIT_MS, 30 * 60 * 1000);
 const STATE_FILE = env.STATE_FILE || path.join(os.homedir(), '.agentsbuzz', 'collector-state.json');
 const PROJECTS_DIR = env.PROJECTS_DIR || '';
 const HOME = os.homedir();
@@ -138,8 +138,11 @@ function sessionCwd(sid, project) {
   } catch {
     /* no state yet */
   }
-  const guess = projectDir(PROJECTS_DIR, project);
-  return guess && fs.existsSync(guess) ? guess : '';
+  for (const root of PROJECTS_DIR.split(path.delimiter).filter(Boolean)) {
+    const guess = projectDir(root, project);
+    if (guess && fs.existsSync(guess)) return guess;
+  }
+  return '';
 }
 
 const busy = new Set();

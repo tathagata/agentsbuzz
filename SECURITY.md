@@ -58,6 +58,7 @@ Out of scope, because it is how the tool is meant to work:
 
 **Collector and launcher**
 
+- A working folder read from a session file is data: only an absolute path is used, only to look for the nearest `.git` on disk, and your home folder is never treated as a project. A `.git` file is read as a path, never followed into running anything.
 - Read repositories with `git log` only, with the pager, fsmonitor, hooks, replacement objects, lazy fetching and prompts switched off, so a repository's own config cannot make git run a program.
 - `~/.agentsbuzz` is kept at `0700`, and the config holding the token at `0600`. `./buzz connect` lists every file it will change and changes nothing without a yes; it backs up each file first.
 

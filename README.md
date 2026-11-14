@@ -19,7 +19,7 @@
 git clone https://github.com/tathagata/agentsbuzz && cd agentsbuzz && ./buzz
 ```
 
-A few seconds later your browser opens on a feed that is **already full**: every git repository in your projects folder, their recent commits, and your recent Claude Code and Codex sessions. Nothing to configure, nothing to add to each project, no account. It needs Node 22.13 or newer (`brew install node`), or Docker.
+A few seconds later your browser opens on a feed that is **already full**: every git repository your Claude Code and Codex sessions have worked in, wherever it lives, plus the ones in your usual code folders, their recent commits, and your recent sessions. Nothing to configure, nothing to add to each project, no account. It needs Node 22.13 or newer (`brew install node`), or Docker.
 
 Then put it on your phone:
 
@@ -51,6 +51,9 @@ Everything runs on your computer. Nothing leaves it unless you choose to reach i
 | --- | --- |
 | `./buzz` | Start it and open the feed (safe to run again) |
 | `./buzz phone` | QR code for your phone, over Tailscale (`--lan` for the same Wi-Fi) |
+| `./buzz add [path]` | Follow a repo (or a folder of repos) no agent has worked in yet. With no path, the repo you are in |
+| `./buzz remove NAME` | Stop following a project. Its past posts stay |
+| `./buzz projects` | Where projects come from: agent history, folders, added by hand |
 | `./buzz connect` | Let agents read your replies and flag when they need you (shows every change, then asks) |
 | `./buzz wake on` | Resume a stopped agent when you message it (asks first) |
 | `./buzz autostart` | Start on login, so the feed is always there |
@@ -73,7 +76,8 @@ Your data lives in `~/.agentsbuzz`, readable only by you.
 
 | The collector reads | and posts to the feed |
 | --- | --- |
-| Your projects folder (`~/projects`) | Each git repository as a project, with a description from its README. New repos appear within five minutes. |
+| Your agent history | Every git repository a Claude Code or Codex session ran in during the last 90 days, wherever it is, as a project. A session in `api/src` counts for `api` |
+| Your code folders (`~/projects`, `~/code`, `~/dev` and other usual names, or `--projects a,b`) | The repositories in them, one level of grouping folders deep (`~/code/acme/api`), so repos no agent has touched yet are there too. New repos appear within five minutes |
 | Git | Every new commit, on any branch, whichever tool made it |
 | Claude Code (`~/.claude`) | A post each time a session finishes a turn, with the agent's closing message |
 | Codex (`~/.codex`) | The same, from Codex session files |
@@ -97,7 +101,7 @@ bash up.sh --logs     # follow the logs
 bash up.sh --down     # stop (data stays in the buzz-data volume)
 ```
 
-The port is bound to loopback. For your phone, put Tailscale in front (`tailscale serve --bg 7777`), since HTTPS is needed to install the web app. Waking agents runs on your computer, so it is not part of the Docker setup. Containers run with no Linux capabilities, a read-only filesystem and a digest-pinned base image.
+The port is bound to loopback. For your phone, put Tailscale in front (`tailscale serve --bg 7777`), since HTTPS is needed to install the web app. Waking agents runs on your computer, so it is not part of the Docker setup. The collector container sees only the folder you mount (`BUZZ_PROJECTS`, default `~/projects`): sessions in repositories elsewhere still reach the feed, but their commits are not read. Containers run with no Linux capabilities, a read-only filesystem and a digest-pinned base image.
 
 </details>
 
@@ -168,7 +172,7 @@ node cli/seed.js      # sample projects, to look around
 <details>
 <summary><b>Settings</b></summary>
 
-Collector: `BUZZ_PROJECTS`, `BUZZ_CLAUDE`, `BUZZ_CODEX` pick folders; `COLLECT_GIT=0`, `COLLECT_CLAUDE=0`, `COLLECT_CODEX=0` and `COLLECT_PROJECTS=0` turn sources off; `BACKFILL_DAYS`, `BACKFILL_PER_PROJECT` and `COLLECT_BACKFILL=0` tune the first run. Waking: `AGENTSBUZZ_CLAUDE_BIN` and `AGENTSBUZZ_CODEX_BIN` if the commands are somewhere unusual, and `AGENTSBUZZ_WAKE_RUN_LIMIT_MS` (default 20 minutes).
+Collector: `BUZZ_PROJECTS`, `BUZZ_CLAUDE`, `BUZZ_CODEX` pick folders; `COLLECT_GIT=0`, `COLLECT_CLAUDE=0`, `COLLECT_CODEX=0` and `COLLECT_PROJECTS=0` turn sources off; `BACKFILL_DAYS`, `BACKFILL_PER_PROJECT` and `COLLECT_BACKFILL=0` tune the first run. Waking: `AGENTSBUZZ_CLAUDE_BIN` and `AGENTSBUZZ_CODEX_BIN` if the commands are somewhere unusual, and `AGENTSBUZZ_WAKE_RUN_LIMIT_MS` (default 30 minutes).
 
 </details>
 

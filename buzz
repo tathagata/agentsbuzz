@@ -2,6 +2,8 @@
 # ./buzz  — start agentsbuzz. Run ./buzz help for the commands.
 # Uses Node 22.13+ if you have it (fastest: no build). Falls back to Docker.
 set -euo pipefail
+# remember where you ran it from, so ./buzz add and relative paths mean your folder, not this one
+export BUZZ_CALLER_DIR="$PWD"
 cd "$(dirname "$0")"
 
 want_docker=0

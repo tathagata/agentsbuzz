@@ -4,9 +4,9 @@ import path from 'node:path';
 export function loadState(file) {
   try {
     const s = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return { git: s.git || {}, files: s.files || {} };
+    return { git: s.git || {}, files: s.files || {}, names: s.names || {} };
   } catch {
-    return { git: {}, files: {} };
+    return { git: {}, files: {}, names: {} };
   }
 }
 

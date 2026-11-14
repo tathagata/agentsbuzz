@@ -190,7 +190,7 @@ sequenceDiagram
   opt waking or following is on
     L->>L: start the waker and the follower too
   end
-  C->>C: find git repositories in the projects folder
+  C->>C: find git repositories: where agent sessions ran, the code folders, ./buzz add
   C->>S: first run only: one batch of recent history, sorted by time
   L->>S: poll project and event counts until they settle
   L->>B: open http://127.0.0.1:port/ with the token in the link
