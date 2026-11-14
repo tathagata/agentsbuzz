@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { safeSessionId, projectDir } from '../cli/deliver.js';
+import { toLocal, sessionRepo } from '../collector/transcripts.js';
 import { agentRepos, describeRepo, git, repoRoot } from '../lib/discover.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -222,6 +223,27 @@ test('a symlink to your home folder cannot make your home folder (a dotfiles rep
   fs.symlinkSync(home, link);
   assert.equal(repoRoot(path.join(link, 'sub'), { home }), '');
   assert.equal(repoRoot(link, { home }), '');
+});
+
+test('in Docker, a session file cannot point the collector outside the mounted projects folder', () => {
+  const host = '/home/someone/projects';
+  const mount = fs.mkdtempSync(path.join(tmp, 'mount-'));
+  const inside = path.join(mount, 'ok', 'src');
+  fs.mkdirSync(inside, { recursive: true });
+  execFileSync('git', ['init', '-q', path.join(mount, 'ok')], { stdio: 'ignore' });
+  assert.equal(sessionRepo(`${host}/ok/src`, host, mount), fs.realpathSync(path.join(mount, 'ok')));
+  // ".." in the recorded path cannot climb out
+  // (it is resolved first: a path that ends up outside the host folder is never translated into the mount)
+  for (const bad of [`${host}/../../etc`, `${host}/ok/../../..`, `${host}/./../x`, `${host}/ok/../../../etc`]) {
+    const t = toLocal(bad, host, mount);
+    assert.ok(t === null || t === bad, `${bad} became ${t}`);
+    assert.ok(!sessionRepo(bad, host, mount), bad);
+  }
+  // a symlink inside the mount that leads to a repository outside it is ignored
+  const outside = fs.mkdtempSync(path.join(tmp, 'outside-'));
+  execFileSync('git', ['init', '-q', outside], { stdio: 'ignore' });
+  fs.symlinkSync(outside, path.join(mount, 'leak'));
+  assert.equal(sessionRepo(`${host}/leak`, host, mount), null);
 });
 
 test('the wake service refuses to run agents for a server without a token', async () => {

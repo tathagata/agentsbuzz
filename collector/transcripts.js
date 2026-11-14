@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { repoRoot } from '../lib/discover.js';
 import { oneLine, summarize } from '../lib/text.js';
 export { oneLine };
 
@@ -21,12 +22,35 @@ export function mapProject(cwd, hostProjects) {
 
 // Session files record paths on your computer. In Docker the same folder is mounted somewhere else
 // (HOST_PROJECTS on the host is PROJECTS_DIR in the container), so translate before looking at disk.
+// The path from the session file is resolved first, so ".." cannot climb out of the mounted folder:
+// a path that would is answered with null (ignore this session's folder).
 export function toLocal(cwd, hostRoot, localRoot) {
   const host = String(hostRoot || '').replace(/\/+$/, '');
   const local = String(localRoot || '').replace(/\/+$/, '');
   if (!cwd || !host || !local || host === local) return cwd;
-  if (cwd === host || cwd.startsWith(`${host}/`)) return local + cwd.slice(host.length);
-  return cwd;
+  if (typeof cwd !== 'string' || cwd.includes('\0') || !path.isAbsolute(cwd)) return cwd;
+  const norm = path.resolve(cwd);
+  if (norm !== host && !norm.startsWith(`${host}/`)) return cwd;
+  const out = path.resolve(local + norm.slice(host.length));
+  return out === local || out.startsWith(`${local}/`) ? out : null;
+}
+
+// The repository a session ran in. '' when it ran outside any repository; null when its folder must
+// be ignored: it escapes the mounted folder in Docker, by ".." or through a symlink that leads out.
+export function sessionRepo(cwd, hostRoot, localRoot) {
+  const local = toLocal(cwd, hostRoot, localRoot);
+  if (local === null) return null;
+  const root = repoRoot(local);
+  if (root && local !== cwd) {
+    let base = '';
+    try {
+      base = fs.realpathSync(localRoot);
+    } catch {
+      return null;
+    }
+    if (root !== base && !root.startsWith(`${base}${path.sep}`)) return null;
+  }
+  return root;
 }
 
 // Walk a folder to a limited depth and return files that pass the filter.
