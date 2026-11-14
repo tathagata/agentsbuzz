@@ -646,7 +646,8 @@ async function addProject() {
   const target = expand(args[1] && !args[1].startsWith('-') ? args[1] : CALLER);
   if (!exists(target)) die(`${tilde(target)} is not a folder.`);
   const cfg = loadConfig();
-  const repo = fs.existsSync(path.join(target, '.git')) ? repoRoot(target, { home: path.parse(target).root }) || target : repoRoot(target);
+  const repo = repoRoot(target);
+  if (!repo && realOf(target) === HOME_REAL) die('Your home folder is never followed as a project. Add the repositories inside it instead.');
   const name = path.basename(repo || target);
   cfg.ignore = (cfg.ignore || []).filter((x) => x !== name && x !== realOf(repo || target));
   if (repo) {

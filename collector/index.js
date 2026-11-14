@@ -171,7 +171,7 @@ async function discover() {
   };
   for (const root of cfg.projectsDirs) for (const f of scanProjects(root)) add(f.dir, 'folder', f);
   for (const d of cfg.extraRepos) {
-    const r = repoRoot(path.resolve(d)) || (fs.existsSync(path.join(d, '.git')) ? d : '');
+    const r = repoRoot(path.resolve(d)); // the same checks as agent history: never your home folder
     if (r) add(r, 'added');
   }
   if (cfg.on('DISCOVER_FROM_AGENTS')) {

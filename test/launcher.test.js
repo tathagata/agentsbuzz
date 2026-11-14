@@ -167,6 +167,16 @@ test('add follows a repo outside the projects folder, projects shows the sources
   assert.match((await buzz('projects')).out, /Not followed\s+solo/);
   const bad = await buzz('add', path.join(home, 'elsewhere', 'solo', 'nope'));
   assert.notEqual(bad.code, 0);
+  // a dotfiles repository in your home folder is never a project, even when you ask
+  execFileSync('git', ['init', '-q', home]);
+  try {
+    const h = await buzz('add', home);
+    assert.notEqual(h.code, 0);
+    assert.match(h.out, /home folder is never followed/);
+    assert.ok(!(JSON.parse(fs.readFileSync(path.join(home, '.agentsbuzz', 'config.json'), 'utf8')).repos || []).some((r) => fs.realpathSync(r) === fs.realpathSync(home)));
+  } finally {
+    fs.rmSync(path.join(home, '.git'), { recursive: true, force: true });
+  }
 });
 
 test('stop stops, and the data is kept', async () => {
