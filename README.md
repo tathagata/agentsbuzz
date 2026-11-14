@@ -172,7 +172,7 @@ node cli/seed.js      # sample projects, to look around
 <details>
 <summary><b>Settings</b></summary>
 
-Collector: `BUZZ_PROJECTS`, `BUZZ_CLAUDE`, `BUZZ_CODEX` pick folders; `COLLECT_GIT=0`, `COLLECT_CLAUDE=0`, `COLLECT_CODEX=0` and `COLLECT_PROJECTS=0` turn sources off; `BACKFILL_DAYS`, `BACKFILL_PER_PROJECT` and `COLLECT_BACKFILL=0` tune the first run. Waking: `AGENTSBUZZ_CLAUDE_BIN` and `AGENTSBUZZ_CODEX_BIN` if the commands are somewhere unusual, and `AGENTSBUZZ_WAKE_RUN_LIMIT_MS` (default 20 minutes).
+Collector: `BUZZ_PROJECTS`, `BUZZ_CLAUDE`, `BUZZ_CODEX` pick folders; `COLLECT_GIT=0`, `COLLECT_CLAUDE=0`, `COLLECT_CODEX=0` and `COLLECT_PROJECTS=0` turn sources off; `BACKFILL_DAYS`, `BACKFILL_PER_PROJECT` and `COLLECT_BACKFILL=0` tune the first run. Waking: `AGENTSBUZZ_CLAUDE_BIN` and `AGENTSBUZZ_CODEX_BIN` if the commands are somewhere unusual, and `AGENTSBUZZ_WAKE_RUN_LIMIT_MS` (default 30 minutes).
 
 </details>
 
