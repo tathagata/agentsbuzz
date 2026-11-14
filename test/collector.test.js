@@ -6,6 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { toLocal } from '../collector/transcripts.js';
+import { repoRoot } from '../lib/discover.js';
+
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 19000 + Math.floor(Math.random() * 900);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -242,6 +245,18 @@ test('a session line bigger than the read chunk does not stall the collector', a
   const huge = line({ type: 'assistant', cwd: globalThis.alphaDir, sessionId: 'giant-1', timestamp: new Date().toISOString(), isSidechain: false, message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'text', text: 'x'.repeat(9 * 1024 * 1024) }] } });
   fs.writeFileSync(path.join(dir, 'giant.jsonl'), huge + assistant(globalThis.alphaDir, 'giant-1', 'Survived the giant line.', 'end_turn'));
   await waitFor(async () => (await events('&project=alpha')).find((e) => e.summary.includes('Survived the giant line')), 'turn after a giant line', 20000);
+});
+
+test('in Docker, a session path from the host finds the repository in the mounted folder, even in a grouping folder', () => {
+  // the session recorded the host path; the container sees the same folder as PROJECTS_DIR
+  const host = '/home/someone/projects';
+  fs.mkdirSync(path.join(projects, 'acme', 'delta', 'src'), { recursive: true });
+  const local = toLocal(`${host}/acme/delta/src`, host, projects);
+  assert.equal(local, path.join(projects, 'acme', 'delta', 'src'));
+  assert.equal(repoRoot(local, { home: tmp }), fs.realpathSync(path.join(projects, 'acme', 'delta')));
+  // only paths under the host folder are translated, and not on the host itself
+  assert.equal(toLocal('/home/someone/projectsX/a', host, projects), '/home/someone/projectsX/a');
+  assert.equal(toLocal(`${projects}/alpha`, projects, projects), `${projects}/alpha`);
 });
 
 test('survives a restart without re-posting old turns', async () => {

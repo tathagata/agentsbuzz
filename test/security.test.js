@@ -196,7 +196,7 @@ test('a session file pointing at a hostile repository cannot make agentsbuzz run
   fs.mkdirSync(path.join(claudeDir, 'projects', '-evil'), { recursive: true });
   fs.writeFileSync(path.join(claudeDir, 'projects', '-evil', 's.jsonl'), `${JSON.stringify({ type: 'user', cwd: evil, sessionId: 's' })}\n`);
   const found = agentRepos({ claudeDir, home });
-  assert.deepEqual(found, [evil]);
+  assert.deepEqual(found, [fs.realpathSync(evil)]);
   describeRepo(found[0]);
   git(found[0], 'status'); // plain git status runs core.fsmonitor; this must not
   assert.equal(fs.existsSync(marker), false, 'reading the repository ran one of its programs');
@@ -211,7 +211,17 @@ test('a working folder from a session file cannot name a folder that is not a re
   const odd = path.join(home, 'odd');
   fs.mkdirSync(odd);
   fs.writeFileSync(path.join(odd, '.git'), 'gitdir: /etc\n');
-  assert.equal(repoRoot(odd, { home }), odd);
+  assert.equal(repoRoot(odd, { home }), fs.realpathSync(odd));
+});
+
+test('a symlink to your home folder cannot make your home folder (a dotfiles repository) a project', () => {
+  const home = fs.mkdtempSync(path.join(tmp, 'home-'));
+  execFileSync('git', ['init', '-q', home], { stdio: 'ignore' });
+  fs.mkdirSync(path.join(home, 'sub'));
+  const link = path.join(fs.mkdtempSync(path.join(tmp, 'elsewhere-')), 'home-link');
+  fs.symlinkSync(home, link);
+  assert.equal(repoRoot(path.join(link, 'sub'), { home }), '');
+  assert.equal(repoRoot(link, { home }), '');
 });
 
 test('the wake service refuses to run agents for a server without a token', async () => {

@@ -10,7 +10,7 @@ import { post, putProject, getProjects } from '../lib/client.js';
 import { scanProjects, describeRepo, agentRepos, repoRoot } from '../lib/discover.js';
 import { loadState, saveState } from './state.js';
 import { pollGit } from './git.js';
-import { Turns, listFiles, readNewLines, parseClaude, parseCodex, mapProject } from './transcripts.js';
+import { Turns, listFiles, readNewLines, parseClaude, parseCodex, mapProject, toLocal } from './transcripts.js';
 
 const env = process.env;
 const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
@@ -76,7 +76,7 @@ function nameFor(dir) {
 // A session belongs to the repository it ran in, wherever that is: a session in ~/work/api/src
 // is "api", not "src". Folders that are not in a repository keep the old rule (the folder name).
 function projectForCwd(cwd) {
-  const root = repoRoot(cwd);
+  const root = repoRoot(toLocal(cwd, cfg.hostProjects, cfg.projectsDirs[0]));
   if (!root) return mapProject(cwd, cfg.hostProjects);
   const dir = real(root);
   const name = nameFor(dir);

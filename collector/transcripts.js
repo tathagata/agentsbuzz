@@ -19,6 +19,16 @@ export function mapProject(cwd, hostProjects) {
   return first.replace(/\.worktrees$/, '');
 }
 
+// Session files record paths on your computer. In Docker the same folder is mounted somewhere else
+// (HOST_PROJECTS on the host is PROJECTS_DIR in the container), so translate before looking at disk.
+export function toLocal(cwd, hostRoot, localRoot) {
+  const host = String(hostRoot || '').replace(/\/+$/, '');
+  const local = String(localRoot || '').replace(/\/+$/, '');
+  if (!cwd || !host || !local || host === local) return cwd;
+  if (cwd === host || cwd.startsWith(`${host}/`)) return local + cwd.slice(host.length);
+  return cwd;
+}
+
 // Walk a folder to a limited depth and return files that pass the filter.
 export function listFiles(dir, depth, accept) {
   const out = [];
