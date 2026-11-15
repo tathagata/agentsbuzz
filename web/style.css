@@ -422,8 +422,20 @@ a, button { touch-action: manipulation; }
 .msg-who { font-weight: 700; color: var(--pr); }
 .msg-text { overflow-wrap: anywhere; }
 .msg-state { grid-column: 2; font-size: 0.8rem; color: var(--muted, #8b98a9); }
-.msg.wait { border-style: dashed; }
-.msg.sent .msg-state::before { content: "\2713  "; }
+.msg.wait { border-style: dashed; border-color: color-mix(in srgb, var(--alert) 55%, transparent); }
+.msg.wait .msg-state { color: var(--alert); }
+.msg.sent { border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.msg.sent .msg-state { color: var(--ok); font-weight: 600; }
+
+/* a post you have not seen yet: a bar on the left, a dot by the time, a heavier line */
+.post { transition: box-shadow 0.6s ease; }
+.post.unread { box-shadow: inset 3px 0 0 var(--pr); }
+.post.unread .text { font-weight: 600; }
+.post.unread .head time::before {
+  content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px;
+  border-radius: 50%; background: var(--pr); vertical-align: 1px;
+}
+@media (prefers-reduced-motion: reduce) { .post { transition: none; } }
 .notes .msgs, .notes .composer { margin-left: var(--pad); margin-right: var(--pad); }
 .notes .msgs { margin-top: 12px; }
 .composer { flex-wrap: wrap; }

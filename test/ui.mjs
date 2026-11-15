@@ -346,6 +346,28 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   assert.equal(await p.locator('form.top-compose').count(), 0, 'Cancel closes it');
 }
 
+// a post that arrives while you are on the page is unread until it has been on screen for a moment
+{
+  await p.evaluate(() => (location.hash = '#/'));
+  await p.evaluate(() => scrollTo(0, 0));
+  await j('/api/events', [{ project: 'trailmap', harness: 'claude-code', agent: 'claude', session_id: 'u1', kind: 'milestone', summary: 'Fresh unread milestone', ts: Date.now() + 5000 }]);
+  const fresh = p.locator('.post', { hasText: 'Fresh unread milestone' });
+  await fresh.waitFor();
+  assert.match(await fresh.getAttribute('class'), /\bunread\b/, 'a new post starts unread');
+  await p.waitForFunction(() => /^\(\d+\) /.test(document.title), null, { timeout: 2000 }).catch(() => {});
+  await p.waitForFunction(() => ![...document.querySelectorAll('.post')].find((e) => e.textContent.includes('Fresh unread milestone'))?.classList.contains('unread'), null, { timeout: 5000 });
+  assert.doesNotMatch(await p.title(), /^\(\d+\) /, 'nothing unread left in the title');
+}
+
+// your messages read like a messaging app: one tick when sent, two once the agent has it
+{
+  const post = p.locator('.post', { hasText: 'Form validation fixed' });
+  const btn = post.locator('button.act', { hasText: /repl/ });
+  if (/^\d/.test(await btn.textContent())) await btn.tap();
+  const states = await post.locator('.msg-state').allTextContents();
+  assert.ok(states.length && states.every((t) => /^✓ Sent · not read yet$|^✓✓ Read by the agent · /.test(t)), states.join(' | '));
+}
+
 assert.deepEqual(errs, []);
 assert.deepEqual(cspViolations, [], 'the app must work under its Content-Security-Policy');
 console.log('PASS');

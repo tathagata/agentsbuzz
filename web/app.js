@@ -333,6 +333,68 @@ function postList(scope, list) {
 
 let keys = null; // keyboard shortcuts, installed once the app's actions exist (see the end of this file)
 const postIndex = new Map(); // key -> thread, so a keyboard shortcut knows what the selected post is
+// ----- read and unread -----
+// Which posts you have seen, kept on this device only (like a remembered filter). Everything from
+// before your first visit counts as read. A post becomes read once it has been on screen for a second.
+const READ_KEY = 'buzz.read';
+const readState = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(READ_KEY) || 'null');
+    if (v && typeof v.base === 'number' && v.ids && typeof v.ids === 'object') return v;
+  } catch {
+    /* private mode or cleared: start fresh */
+  }
+  return { base: Date.now(), ids: {}, fresh: true };
+})();
+function saveRead() {
+  try {
+    const keys = Object.keys(readState.ids);
+    for (const k of keys.slice(0, Math.max(0, keys.length - 800))) delete readState.ids[k];
+    localStorage.setItem(READ_KEY, JSON.stringify(readState));
+  } catch {
+    /* not saved: it is only a convenience */
+  }
+}
+if (readState.fresh) {
+  delete readState.fresh;
+  saveRead(); // remember the first visit, so posts that arrive after it count as new next time
+}
+const isUnread = (t) => t.latest.ts > readState.base && (readState.ids[t.key] || 0) < t.latest.id;
+function markRead(key) {
+  const t = postIndex.get(key);
+  if (!t || !isUnread(t)) return;
+  readState.ids[key] = t.latest.id;
+  saveRead();
+  requestRender();
+}
+const readTimers = new Map();
+const readObserver = new IntersectionObserver(
+  (entries) => {
+    for (const e of entries) {
+      const key = e.target.dataset.k;
+      if (e.isIntersecting && e.intersectionRatio >= 0.6) {
+        if (!readTimers.has(key)) readTimers.set(key, setTimeout(() => (readTimers.delete(key), !document.hidden && markRead(key)), 1000));
+      } else {
+        clearTimeout(readTimers.get(key));
+        readTimers.delete(key);
+      }
+    }
+  },
+  { threshold: [0, 0.6] }
+);
+const watchedForRead = new WeakSet();
+function watchUnread() {
+  let n = 0;
+  for (const el of document.querySelectorAll('#view .post.unread')) {
+    n++;
+    if (!watchedForRead.has(el)) {
+      watchedForRead.add(el);
+      readObserver.observe(el);
+    }
+  }
+  return n;
+}
+
 function postNode(t) {
   const { key, head, latest, rest } = t;
   postIndex.set(key, t);
@@ -340,7 +402,7 @@ function postNode(t) {
   const sig = [
     head.id, head.kind, head.summary, head.body || '', head.url || '', head.resolved ? 1 : 0, head.needs_you ? 1 : 0,
     latest.id, rest.map((e) => e.id).join(','), open ? rest.map((e) => ago(e.ts)).join(',') : '',
-    open ? 1 : 0, pendingAnswers.has(head.id) ? 1 : 0, state.expanded.has(`${key}:body`) ? 1 : 0, state.expanded.has(`${key}:replies`) ? 1 : 0, state.composing.has(key) ? 1 : 0, replySig(repliesFor(head)), Date.now() - latest.ts < LIVE_MS ? 1 : 0, ago(head.ts),
+    open ? 1 : 0, pendingAnswers.has(head.id) ? 1 : 0, state.expanded.has(`${key}:body`) ? 1 : 0, state.expanded.has(`${key}:replies`) ? 1 : 0, state.composing.has(key) ? 1 : 0, replySig(repliesFor(head)), Date.now() - latest.ts < LIVE_MS ? 1 : 0, ago(head.ts), isUnread(t) ? 1 : 0,
   ].join('\u241f');
   return cached(key, sig, () => {
     const li = renderPost(t);
@@ -427,6 +489,8 @@ function render() {
 
   restoreFocus(keep);
   anchorAfter(anchor);
+  const unread = watchUnread();
+  if (unread) document.title = `(${unread}) ${document.title}`;
   keys?.afterRender();
 }
 
@@ -795,7 +859,9 @@ const projectNotes = (name) => [...state.replies.values()].filter((r) => !r.sess
 const replySig = (list) => list.map((r) => `${r.id}${r.delivered ? 'd' : 'w'}${r.delivered ? ago(r.delivered_ts) : ''}`).join(',');
 
 function messageLine(r) {
-  const state_ = r.delivered ? `Delivered ${ago(r.delivered_ts)}${ago(r.delivered_ts) === 'now' ? '' : ' ago'}` : 'Waiting for the agent';
+  // like a messaging app: one grey tick when sent, two green ones once the agent has it
+  const when = r.delivered ? ago(r.delivered_ts) : '';
+  const state_ = r.delivered ? `✓✓ Read by the agent · ${when === 'now' ? 'just now' : `${when} ago`}` : '✓ Sent · not read yet';
   return h(
     'div',
     { class: `msg ${r.delivered ? 'sent' : 'wait'}` },
@@ -812,7 +878,8 @@ function repliesLabel(list) {
   return `${list.length} ${list.length === 1 ? 'reply' : 'replies'}${waiting ? ` · ${list.length === 1 ? '' : `${waiting} `}waiting` : ''}`;
 }
 
-function renderPost({ key, head, latest, rest }) {
+function renderPost(t) {
+  const { key, head, latest, rest } = t;
   const live = Date.now() - latest.ts < LIVE_MS;
   const open = state.expanded.has(key);
   const replies = repliesFor(head);
@@ -871,7 +938,7 @@ function renderPost({ key, head, latest, rest }) {
 
   return h(
     'li',
-    { class: 'post', style: `--c:${color(head.project)}` },
+    { class: `post${isUnread(t) ? ' unread' : ''}`, style: `--c:${color(head.project)}` },
     avatar(head.project, live),
     h(
       'div',
