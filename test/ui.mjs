@@ -62,6 +62,10 @@ await j('/api/events', [
   const g1 = (await (await fetch(BASE + '/api/events?session_id=g1&limit=1')).json()).events[0];
   await j(`/api/events/${g1.id}/reply`, { prompt: 'first message' });
   await j(`/api/events/${g1.id}/reply`, { prompt: 'second message' });
+  // a reply the agent has already picked up: its fold shows no waiting state
+  const a1 = (await (await fetch(BASE + '/api/events?session_id=a1&limit=1')).json()).events[0];
+  await j(`/api/events/${a1.id}/reply`, { prompt: 'picked up already' });
+  await j('/api/replies/claim', { session_id: 'a1', project: 'agentsbuzz' });
 }
 for (const [n, st] of [['cookbook', 'paused'], ['dotfiles', 'paused'], ['old-idea', 'idea'], ['trailmap', 'active'], ['agentsbuzz', 'active'], ['latency-lab', 'active'], ['gitops-plane', 'active']]) await j(`/api/projects/${n}`, { status: st, plan: n === 'trailmap' ? [{ title: 'Rules', status: 'done' }, { title: 'Explainer', status: 'doing' }, { title: 'Demo', status: 'todo' }] : undefined }, 'PUT');
 const b = await chromium.launch();
@@ -107,15 +111,31 @@ assert.equal(await p.evaluate(() => document.documentElement.scrollWidth > inner
 // threads read newest first: Reply box on top, then your messages, then the earlier updates
 {
   const post = p.locator('.post', { hasText: 'Form validation fixed' });
+  // your messages are folded like the updates, behind a count
+  assert.equal(await post.locator('.msgs').count(), 0, 'replies start folded');
+  const repliesBtn = post.locator('button.act', { hasText: /^2 replies/ });
+  assert.equal(await repliesBtn.count(), 1, 'the fold says how many replies there are');
+  // neither has reached the agent: the folded button says so, in the waiting colour
+  assert.equal(await repliesBtn.textContent(), '2 replies · 2 waiting');
+  assert.match(await repliesBtn.getAttribute('class'), /\bwaiting\b/);
+  await repliesBtn.tap();
+  const hideBtn = post.locator('button.act', { hasText: 'Hide replies' });
+  assert.doesNotMatch(await hideBtn.getAttribute('class'), /\bwaiting\b/, 'once open, the messages show their own state');
   await post.locator('button.act', { hasText: /updates?$/ }).tap();
-  await post.locator('button.act', { hasText: 'Reply' }).tap();
+  await post.locator('button.act', { hasText: /^Reply$/ }).tap();
   await sleep(300);
   const order = await post.evaluate((el) => [...el.querySelectorAll('.composer, .msgs, .thread')].map((x) => x.className.split(' ')[0]));
   assert.deepEqual(order, ['composer', 'msgs', 'thread'], 'Reply box first, then messages, then updates');
   assert.deepEqual(await post.locator('.msg-text').allTextContents(), ['second message', 'first message'], 'messages newest first');
   const ups = await post.locator('.reply-line').evaluateAll((els) => els.map((e) => e.lastChild.textContent));
   assert.deepEqual(ups, ['Older update two', 'Older update one'], 'updates newest first');
-  await post.locator('button.act', { hasText: 'Reply' }).tap(); // close it again
+  await post.locator('button.act', { hasText: /^Reply$/ }).tap(); // close it again
+  await post.locator('button.act', { hasText: 'Hide replies' }).tap();
+  assert.equal(await post.locator('.msgs').count(), 0, 'Hide replies folds them again');
+  // a delivered reply folds to a plain count, without the waiting colour
+  const done = p.locator('.post', { hasText: 'Dock switcher works' }).locator('button.act', { hasText: /repl/ });
+  assert.equal(await done.textContent(), '1 reply');
+  assert.doesNotMatch(await done.getAttribute('class'), /\bwaiting\b/);
 }
 
 // the dock: opens, shows active projects first, switches the feed in place
@@ -239,10 +259,10 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   // Enter on a focused button presses that button; it does not act on the selected post
   await kb.press('j');
   const selKey = await p.locator('.post.sel').getAttribute('data-k');
-  const other = p.locator('.post:not(.sel)', { has: p.locator('button.act', { hasText: 'Reply' }) }).first();
+  const other = p.locator('.post:not(.sel)', { has: p.locator('button.act', { hasText: /^Reply$/ }) }).first();
   const otherKey = await other.getAttribute('data-k');
   const selOpen = await p.locator('.post.sel .thread').count();
-  await other.locator('button.act', { hasText: 'Reply' }).focus();
+  await other.locator('button.act', { hasText: /^Reply$/ }).focus();
   await kb.press('Enter');
   await p.waitForFunction((k) => document.querySelector(`.post[data-k="${CSS.escape(k)}"] .composer`), otherKey);
   assert.equal(await p.locator(`.post[data-k="${selKey}"] .thread`).count(), selOpen, 'the selected post was not toggled');

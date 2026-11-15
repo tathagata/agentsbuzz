@@ -208,6 +208,7 @@ main { max-width: 640px; margin: 0 auto; }
 }
 .act:hover { color: var(--text); }
 .act.primary { color: var(--alert); font-weight: 600; }
+.act.waiting { color: var(--alert); }
 
 /* replies inside a thread */
 .thread {
