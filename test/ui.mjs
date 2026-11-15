@@ -62,6 +62,10 @@ await j('/api/events', [
   const g1 = (await (await fetch(BASE + '/api/events?session_id=g1&limit=1')).json()).events[0];
   await j(`/api/events/${g1.id}/reply`, { prompt: 'first message' });
   await j(`/api/events/${g1.id}/reply`, { prompt: 'second message' });
+  // a reply the agent has already picked up: its fold shows no waiting state
+  const a1 = (await (await fetch(BASE + '/api/events?session_id=a1&limit=1')).json()).events[0];
+  await j(`/api/events/${a1.id}/reply`, { prompt: 'picked up already' });
+  await j('/api/replies/claim', { session_id: 'a1', project: 'agentsbuzz' });
 }
 for (const [n, st] of [['cookbook', 'paused'], ['dotfiles', 'paused'], ['old-idea', 'idea'], ['trailmap', 'active'], ['agentsbuzz', 'active'], ['latency-lab', 'active'], ['gitops-plane', 'active']]) await j(`/api/projects/${n}`, { status: st, plan: n === 'trailmap' ? [{ title: 'Rules', status: 'done' }, { title: 'Explainer', status: 'doing' }, { title: 'Demo', status: 'todo' }] : undefined }, 'PUT');
 const b = await chromium.launch();
@@ -111,7 +115,12 @@ assert.equal(await p.evaluate(() => document.documentElement.scrollWidth > inner
   assert.equal(await post.locator('.msgs').count(), 0, 'replies start folded');
   const repliesBtn = post.locator('button.act', { hasText: /^2 replies/ });
   assert.equal(await repliesBtn.count(), 1, 'the fold says how many replies there are');
+  // neither has reached the agent: the folded button says so, in the waiting colour
+  assert.equal(await repliesBtn.textContent(), '2 replies · 2 waiting');
+  assert.match(await repliesBtn.getAttribute('class'), /\bwaiting\b/);
   await repliesBtn.tap();
+  const hideBtn = post.locator('button.act', { hasText: 'Hide replies' });
+  assert.doesNotMatch(await hideBtn.getAttribute('class'), /\bwaiting\b/, 'once open, the messages show their own state');
   await post.locator('button.act', { hasText: /updates?$/ }).tap();
   await post.locator('button.act', { hasText: /^Reply$/ }).tap();
   await sleep(300);
@@ -123,6 +132,10 @@ assert.equal(await p.evaluate(() => document.documentElement.scrollWidth > inner
   await post.locator('button.act', { hasText: /^Reply$/ }).tap(); // close it again
   await post.locator('button.act', { hasText: 'Hide replies' }).tap();
   assert.equal(await post.locator('.msgs').count(), 0, 'Hide replies folds them again');
+  // a delivered reply folds to a plain count, without the waiting colour
+  const done = p.locator('.post', { hasText: 'Dock switcher works' }).locator('button.act', { hasText: /repl/ });
+  assert.equal(await done.textContent(), '1 reply');
+  assert.doesNotMatch(await done.getAttribute('class'), /\bwaiting\b/);
 }
 
 // the dock: opens, shows active projects first, switches the feed in place
