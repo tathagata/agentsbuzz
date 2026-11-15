@@ -8,6 +8,10 @@
 ![Node 22.13+](https://img.shields.io/badge/node-%E2%89%A522.13-339933.svg)
 
 <p align="center">
+  <a href="https://youtu.be/5aFTDk2oqmY"><img src="docs/video.jpg" width="640" alt="Watch the 20-second agentsbuzz video on YouTube: every project and every agent in one feed on your phone"></a>
+</p>
+
+<p align="center">
   <img src="docs/feed.png" width="300" alt="The feed: an agent waiting for an answer pinned at the top, then the latest posts from each project">
   &nbsp;&nbsp;
   <img src="docs/project.png" width="300" alt="A project page: its plan, a box to message its agents, and its updates">
