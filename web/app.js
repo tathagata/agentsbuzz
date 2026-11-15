@@ -337,7 +337,7 @@ function postNode(t) {
   const sig = [
     head.id, head.kind, head.summary, head.body || '', head.url || '', head.resolved ? 1 : 0, head.needs_you ? 1 : 0,
     latest.id, rest.map((e) => e.id).join(','), open ? rest.map((e) => ago(e.ts)).join(',') : '',
-    open ? 1 : 0, state.expanded.has(`${key}:body`) ? 1 : 0, state.composing.has(key) ? 1 : 0, replySig(repliesFor(head)), Date.now() - latest.ts < LIVE_MS ? 1 : 0, ago(head.ts),
+    open ? 1 : 0, state.expanded.has(`${key}:body`) ? 1 : 0, state.expanded.has(`${key}:replies`) ? 1 : 0, state.composing.has(key) ? 1 : 0, replySig(repliesFor(head)), Date.now() - latest.ts < LIVE_MS ? 1 : 0, ago(head.ts),
   ].join('\u241f');
   return cached(key, sig, () => {
     const li = renderPost(t);
@@ -800,9 +800,18 @@ function messageLine(r) {
   );
 }
 
+// Your messages fold away like the updates, so a long conversation does not push the feed down.
+// The button still says when one has not reached the agent yet.
+function repliesLabel(list) {
+  const waiting = list.filter((r) => !r.delivered).length;
+  return `${list.length} ${list.length === 1 ? 'reply' : 'replies'}${waiting ? ` · ${list.length === 1 ? '' : `${waiting} `}waiting` : ''}`;
+}
+
 function renderPost({ key, head, latest, rest }) {
   const live = Date.now() - latest.ts < LIVE_MS;
   const open = state.expanded.has(key);
+  const replies = repliesFor(head);
+  const repliesOpen = state.expanded.has(`${key}:replies`);
   const url = safeUrl(head.url);
 
   const text = h('p', { class: 'text' });
@@ -822,6 +831,20 @@ function renderPost({ key, head, latest, rest }) {
         text: open ? 'Hide updates' : `${rest.length} ${rest.length === 1 ? 'update' : 'updates'}`,
         onclick: () => {
           open ? state.expanded.delete(key) : state.expanded.add(key);
+          render();
+        },
+      })
+    );
+  }
+  if (replies.length) {
+    acts.append(
+      h('button', {
+        class: `act${!repliesOpen && replies.some((r) => !r.delivered) ? ' waiting' : ''}`,
+        type: 'button',
+        'aria-expanded': String(repliesOpen),
+        text: repliesOpen ? 'Hide replies' : repliesLabel(replies),
+        onclick: () => {
+          repliesOpen ? state.expanded.delete(`${key}:replies`) : state.expanded.add(`${key}:replies`);
           render();
         },
       })
@@ -861,7 +884,7 @@ function renderPost({ key, head, latest, rest }) {
       // Newest first, like the project notes: the box you type in, then your messages, then the
       // earlier updates, so the latest of everything is right under your thumb.
       state.composing.has(key) ? composer(head, key) : null,
-      repliesFor(head).length ? h('div', { class: 'msgs' }, ...[...repliesFor(head)].sort((x, y) => y.id - x.id).map(messageLine)) : null,
+      replies.length && repliesOpen ? h('div', { class: 'msgs' }, ...[...replies].sort((x, y) => y.id - x.id).map(messageLine)) : null,
       open
         ? h(
             'div',
@@ -918,6 +941,7 @@ function composer(head, key) {
         state.replies.set(row.id, row);
         state.drafts.delete(`reply:${key}`);
         state.composing.delete(key);
+        state.expanded.add(`${key}:replies`); // show what you just sent
         render();
       },
     },

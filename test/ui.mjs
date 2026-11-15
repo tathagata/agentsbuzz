@@ -107,15 +107,22 @@ assert.equal(await p.evaluate(() => document.documentElement.scrollWidth > inner
 // threads read newest first: Reply box on top, then your messages, then the earlier updates
 {
   const post = p.locator('.post', { hasText: 'Form validation fixed' });
+  // your messages are folded like the updates, behind a count
+  assert.equal(await post.locator('.msgs').count(), 0, 'replies start folded');
+  const repliesBtn = post.locator('button.act', { hasText: /^2 replies/ });
+  assert.equal(await repliesBtn.count(), 1, 'the fold says how many replies there are');
+  await repliesBtn.tap();
   await post.locator('button.act', { hasText: /updates?$/ }).tap();
-  await post.locator('button.act', { hasText: 'Reply' }).tap();
+  await post.locator('button.act', { hasText: /^Reply$/ }).tap();
   await sleep(300);
   const order = await post.evaluate((el) => [...el.querySelectorAll('.composer, .msgs, .thread')].map((x) => x.className.split(' ')[0]));
   assert.deepEqual(order, ['composer', 'msgs', 'thread'], 'Reply box first, then messages, then updates');
   assert.deepEqual(await post.locator('.msg-text').allTextContents(), ['second message', 'first message'], 'messages newest first');
   const ups = await post.locator('.reply-line').evaluateAll((els) => els.map((e) => e.lastChild.textContent));
   assert.deepEqual(ups, ['Older update two', 'Older update one'], 'updates newest first');
-  await post.locator('button.act', { hasText: 'Reply' }).tap(); // close it again
+  await post.locator('button.act', { hasText: /^Reply$/ }).tap(); // close it again
+  await post.locator('button.act', { hasText: 'Hide replies' }).tap();
+  assert.equal(await post.locator('.msgs').count(), 0, 'Hide replies folds them again');
 }
 
 // the dock: opens, shows active projects first, switches the feed in place
