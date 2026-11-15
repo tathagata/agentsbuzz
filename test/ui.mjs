@@ -317,6 +317,35 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   assert.equal(await p.evaluate(() => document.activeElement.tagName), 'BODY', 'Esc leaves the Reply box');
 }
 
+// an agent waiting on you gets one-tap answers; a tap can be undone before anything is sent
+{
+  // its own waiting item: the keyboard checks above marked the seeded one handled
+  await j('/api/events', [{ project: 'latency-lab', harness: 'claude-code', agent: 'claude', session_id: 'l2', kind: 'blocked', needs_you: true, summary: 'Need the next capture sample', ts: Date.now() }]);
+  await p.evaluate(() => (location.hash = '#/'));
+  await p.waitForFunction(() => [...document.querySelectorAll('#view .need')].some((e) => e.textContent.includes('next capture sample')));
+  const need = p.locator('.need', { hasText: 'next capture sample' });
+  const go = need.locator('.answers .chip', { hasText: 'Go ahead' });
+  assert.equal(await go.count(), 1, 'a waiting item with no choices offers Go ahead');
+  const before = (await (await fetch(BASE + '/api/replies?all=1')).json()).replies.length;
+  await go.tap();
+  await p.waitForFunction(() => !document.getElementById('toast').hidden);
+  assert.match(await p.locator('#toast').textContent(), /Sending “Go ahead\.” to latency-lab/);
+  await p.locator('#toast button', { hasText: 'Undo' }).tap();
+  await sleep(3000); // longer than the send delay
+  assert.equal((await (await fetch(BASE + '/api/replies?all=1')).json()).replies.length, before, 'Undo sends nothing');
+  assert.equal(await need.count(), 1, 'and the agent still needs you');
+
+  // the one-line box on top of the feed offers the agent waiting on you, and quick replies add to the text
+  const top = p.locator('button.top-compose');
+  assert.match(await top.textContent(), /^LL?.*Answer latency-lab…$/s);
+  await top.tap();
+  const form = p.locator('form.top-compose');
+  await form.locator('.quick .chip', { hasText: 'Run the tests' }).tap();
+  assert.equal(await form.locator('textarea').inputValue(), 'Run the tests.');
+  await form.locator('button.act', { hasText: 'Cancel' }).tap();
+  assert.equal(await p.locator('form.top-compose').count(), 0, 'Cancel closes it');
+}
+
 assert.deepEqual(errs, []);
 assert.deepEqual(cspViolations, [], 'the app must work under its Content-Security-Policy');
 console.log('PASS');
