@@ -88,10 +88,21 @@ before(async () => {
     stdio: ['ignore', fs.openSync(path.join(tmp, 'follow.log'), 'a'), 'ignore'],
   });
 });
-after(() => {
-  follower?.kill();
-  server?.kill();
-  fs.rmSync(tmp, { recursive: true, force: true });
+// Stop a follower and wait until it has exited, then delete its folders. A git command it started
+// can still be finishing for a moment after it exits, so the delete retries instead of failing on a
+// .git folder that just gained a file (ENOTEMPTY).
+async function stop(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((r) => child.once('exit', r));
+  child.kill();
+  await exited;
+}
+const rmTree = (dir) => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+
+after(async () => {
+  await stop(follower);
+  await stop(server);
+  rmTree(tmp);
 });
 const restartLog = () => (fs.existsSync(restarts) ? fs.readFileSync(restarts, 'utf8').trim().split('\n').filter(Boolean) : []);
 
@@ -233,9 +244,9 @@ test('an edit made while the deploy is being announced stops the restart', async
     await new Promise((r) => setTimeout(r, 500));
     assert.equal(fs.existsSync(log2), false, 'no restart with the edit in place');
   } finally {
-    f2.kill();
+    await stop(f2);
     feed2.close();
-    fs.rmSync(t2, { recursive: true, force: true });
+    rmTree(t2);
   }
 });
 
@@ -279,7 +290,7 @@ test('a branch switch while the tests run is noticed: the other branch is never 
     assert.equal(git(w3, 'rev-parse', 'side'), first, 'the other branch was not fast-forwarded');
     assert.equal(fs.existsSync(log3), false, 'no restart');
   } finally {
-    f3.kill();
-    fs.rmSync(t3, { recursive: true, force: true });
+    await stop(f3);
+    rmTree(t3);
   }
 });
