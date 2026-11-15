@@ -259,10 +259,10 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   // Enter on a focused button presses that button; it does not act on the selected post
   await kb.press('j');
   const selKey = await p.locator('.post.sel').getAttribute('data-k');
-  const other = p.locator('.post:not(.sel)', { has: p.locator('button.act', { hasText: 'Reply' }) }).first();
+  const other = p.locator('.post:not(.sel)', { has: p.locator('button.act', { hasText: /^Reply$/ }) }).first();
   const otherKey = await other.getAttribute('data-k');
   const selOpen = await p.locator('.post.sel .thread').count();
-  await other.locator('button.act', { hasText: 'Reply' }).focus();
+  await other.locator('button.act', { hasText: /^Reply$/ }).focus();
   await kb.press('Enter');
   await p.waitForFunction((k) => document.querySelector(`.post[data-k="${CSS.escape(k)}"] .composer`), otherKey);
   assert.equal(await p.locator(`.post[data-k="${selKey}"] .thread`).count(), selOpen, 'the selected post was not toggled');
