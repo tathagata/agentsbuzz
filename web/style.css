@@ -210,6 +210,45 @@ main { max-width: 640px; margin: 0 auto; }
 .act.primary { color: var(--alert); font-weight: 600; }
 .act.waiting { color: var(--alert); }
 
+/* ---------- one-tap answers, quick replies, the top box, the toast ---------- */
+.answers { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip {
+  border: 1px solid var(--line); background: var(--raise); color: var(--text);
+  border-radius: 999px; padding: 6px 12px; font-size: 0.88rem; font-weight: 600; line-height: 1.2;
+}
+.answers .chip { border-color: color-mix(in srgb, var(--alert) 50%, transparent); }
+.chip:disabled { opacity: 0.45; }
+.quick { display: flex; gap: 6px; overflow-x: auto; flex: 1 1 100%; scrollbar-width: none; }
+.quick::-webkit-scrollbar { display: none; }
+.quick .chip { flex: none; font-weight: 500; font-size: 0.82rem; padding: 4px 10px; }
+.composer button.secondary { background: transparent; color: var(--alert); border: 1px solid color-mix(in srgb, var(--alert) 55%, transparent); }
+.need.next { animation: nextneed 1.6s ease-out; }
+@keyframes nextneed { from { background: color-mix(in srgb, var(--alert) 32%, transparent); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .need.next { animation: none; outline: 2px solid var(--alert); outline-offset: -2px; } }
+.toast {
+  position: fixed; left: 50%; bottom: calc(92px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  display: flex; gap: 14px; align-items: center; z-index: 60; max-width: calc(100% - 32px);
+  background: var(--text); color: var(--bg); border-radius: 12px; padding: 10px 14px;
+  font-size: 0.92rem; box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+.toast[hidden] { display: none; }
+.toast button { background: none; border: 0; color: inherit; font-weight: 800; text-decoration: underline; padding: 0; }
+.top-compose {
+  display: flex; align-items: center; gap: 10px;
+  margin: 12px var(--pad) 4px; width: calc(100% - 2 * var(--pad));
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 12px; color: var(--muted); font: inherit; text-align: left;
+}
+.top-compose .avatar { width: 32px; height: 32px; font-size: 0.72rem; flex: none; }
+.top-compose.open { color: var(--text); }
+.tc-row { display: flex; align-items: center; gap: 10px; flex: 1 1 100%; }
+.tc-name { font-weight: 700; }
+.tc-proj { background: var(--raise); color: var(--text); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font: inherit; font-weight: 600; max-width: 60%; }
+.tc-row .act { margin-left: auto; }
+/* inside a reply box, chips and Cancel keep their own look, not the solid Send button's */
+.composer .chip { align-self: auto; background: var(--raise); color: var(--text); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font-weight: 500; }
+.composer .act { align-self: auto; background: none; color: var(--muted); border: 0; padding: 4px 0; font-weight: 500; }
+
 /* replies inside a thread */
 .thread {
   margin: 10px 0 0;

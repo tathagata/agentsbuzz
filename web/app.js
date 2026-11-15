@@ -2,6 +2,7 @@
 import { renderMarkdown, renderInline } from '/md.js';
 import { assignMonograms, colorFor } from '/avatar.js';
 import { installShortcuts } from '/keys.js';
+import { suggestions, QUICK_REPLIES } from '/suggest.js';
 
 const $ = (id) => document.getElementById(id);
 const IMPORTANT = new Set(['milestone', 'done', 'pr', 'blocked', 'error']);
@@ -38,6 +39,8 @@ const state = {
   quiet: localStorage.getItem('buzz.quiet') === '1',
   expanded: new Set(),
   composing: new Set(),
+  topOpen: false, // the one-line box at the top of the feed, opened
+  topProject: '', // the project you picked in it
   drafts: new Map(),
   cursors: new Map(), // scope -> { oldest, done, loaded }
   loading: false,
@@ -337,7 +340,7 @@ function postNode(t) {
   const sig = [
     head.id, head.kind, head.summary, head.body || '', head.url || '', head.resolved ? 1 : 0, head.needs_you ? 1 : 0,
     latest.id, rest.map((e) => e.id).join(','), open ? rest.map((e) => ago(e.ts)).join(',') : '',
-    open ? 1 : 0, state.expanded.has(`${key}:body`) ? 1 : 0, state.expanded.has(`${key}:replies`) ? 1 : 0, state.composing.has(key) ? 1 : 0, replySig(repliesFor(head)), Date.now() - latest.ts < LIVE_MS ? 1 : 0, ago(head.ts),
+    open ? 1 : 0, pendingAnswers.has(head.id) ? 1 : 0, state.expanded.has(`${key}:body`) ? 1 : 0, state.expanded.has(`${key}:replies`) ? 1 : 0, state.composing.has(key) ? 1 : 0, replySig(repliesFor(head)), Date.now() - latest.ts < LIVE_MS ? 1 : 0, ago(head.ts),
   ].join('\u241f');
   return cached(key, sig, () => {
     const li = renderPost(t);
@@ -637,6 +640,7 @@ function renderFeed() {
   const list = threads(state.feedProject);
   return [
     state.feedProject ? scopeHeader(state.feedProject) : null,
+    topComposer(),
     needsLane(state.feedProject),
     list.length
       ? postList(state.feedProject, list)
@@ -776,9 +780,10 @@ function needsLane(project) {
           'div',
           { class: 'txt' },
           h('a', { class: 'who', href: feedHref(e.project), text: `${e.project} · ${e.agent || e.harness} · ${ago(e.ts)}` }),
-          h('div', { class: 'what' }, renderInline(e.summary))
+          h('div', { class: 'what' }, renderInline(e.summary)),
+          answerChips(e)
         ),
-        h('button', { class: 'act primary', type: 'button', onclick: () => resolve(e.id), text: 'Handled' })
+        h('button', { class: 'act primary', type: 'button', onclick: () => resolve(e.id, { advance: true }), text: 'Handled' })
       )
     )
   );
@@ -880,6 +885,7 @@ function renderPost({ key, head, latest, rest }) {
       ),
       text,
       head.body ? bodyBlock(head, key) : null,
+      (head.kind === 'blocked' || head.needs_you) && !head.resolved ? answerChips(head) : null,
       acts,
       // Newest first, like the project notes: the box you type in, then your messages, then the
       // earlier updates, so the latest of everything is right under your thumb.
@@ -929,6 +935,7 @@ function bodyBlock(head, key) {
 
 function composer(head, key) {
   const ta = draftField('textarea', `reply:${key}`, { placeholder: 'Message for this agent', 'aria-label': 'Message for this agent', rows: '2' });
+  const waiting = head.needs_you && !head.resolved;
   return h(
     'form',
     {
@@ -942,20 +949,206 @@ function composer(head, key) {
         state.drafts.delete(`reply:${key}`);
         state.composing.delete(key);
         state.expanded.add(`${key}:replies`); // show what you just sent
-        render();
+        if (ev.submitter?.value === 'handled') await resolve(head.id, { advance: true });
+        else render();
       },
     },
     ta,
+    quickChips(ta, `reply:${key}`),
     h('p', { class: 'hint', text: state.wake ? 'If the agent is idle, it is woken up to handle this.' : 'Delivered when the agent next starts or finishes a turn. To wake idle agents: ./buzz wake on' }),
+    waiting ? h('button', { type: 'submit', value: 'handled', class: 'secondary', text: 'Send & mark handled' }) : null,
+    h('button', { type: 'submit', value: 'send', text: 'Send' })
+  );
+}
+
+// Things you often say, as chips under a text box: a tap adds one to what you are typing.
+function quickChips(ta, draftKey) {
+  return h(
+    'div',
+    { class: 'quick', role: 'group', 'aria-label': 'Quick replies' },
+    ...QUICK_REPLIES.map((q) =>
+      h('button', {
+        class: 'chip',
+        type: 'button',
+        text: q,
+        onclick: () => {
+          const now = ta.value.trim();
+          ta.value = `${now ? `${now}${/[.!?]$/.test(now) ? '' : '.'} ` : ''}${q}.`;
+          state.drafts.set(draftKey, ta.value);
+          ta.focus();
+        },
+      })
+    )
+  );
+}
+
+// ----- one-tap answers -----
+// An agent waiting on you often asks a question with its own answers in it ("Grams or cups?").
+// They become buttons. A tap sends after a short pause you can undo, marks the item handled and
+// moves you on to the next agent that is waiting, like working through an inbox.
+const pendingAnswers = new Map(); // event id -> timer
+function answerChips(e) {
+  if (!e || e.resolved) return null;
+  const pending = pendingAnswers.has(e.id);
+  return h(
+    'div',
+    { class: 'answers', role: 'group', 'aria-label': 'Quick answers' },
+    ...suggestions(e.summary, e.body || '').map((s) => h('button', { class: 'chip', type: 'button', disabled: pending, title: s.reply, text: s.label, onclick: () => answer(e, s.reply) }))
+  );
+}
+function answer(e, reply) {
+  if (pendingAnswers.has(e.id)) return;
+  const send = async () => {
+    pendingAnswers.delete(e.id);
+    try {
+      const path = e.session_id ? `/api/events/${e.id}/reply` : `/api/projects/${encodeURIComponent(e.project)}/reply`;
+      const row = await api(path, { method: 'POST', body: JSON.stringify({ prompt: reply }) });
+      state.replies.set(row.id, row);
+      if (e.needs_you && !e.resolved) await resolve(e.id, { advance: true });
+      else render();
+    } catch (err) {
+      toast(`Not sent: ${err.message}`);
+      render();
+    }
+  };
+  pendingAnswers.set(e.id, setTimeout(send, 2500));
+  render();
+  toast(`Sending “${reply}” to ${e.project}`, {
+    ms: 2500,
+    undo: () => {
+      clearTimeout(pendingAnswers.get(e.id));
+      pendingAnswers.delete(e.id);
+      render();
+    },
+  });
+}
+
+let toastTimer = 0;
+function toast(text, { undo, ms = 3000 } = {}) {
+  const el = $('toast');
+  el.replaceChildren(
+    ...[
+      h('span', { text }),
+      undo
+      ? h('button', {
+          type: 'button',
+          text: 'Undo',
+          onclick: () => {
+            clearTimeout(toastTimer);
+            el.hidden = true;
+            undo();
+          },
+        })
+      : null,
+    ].filter(Boolean)
+  );
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.hidden = true), ms);
+}
+
+// After you deal with one agent, bring the next one that is waiting into view.
+function moveToNextNeed() {
+  const rows = [...document.querySelectorAll('#view .need')];
+  if (!rows.length) return toast('All clear: no agent is waiting on you');
+  const next = rows[0];
+  const r = next.getBoundingClientRect();
+  if (r.top < 60 || r.bottom > innerHeight - 80) next.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  next.classList.add('next');
+  setTimeout(() => next.classList.remove('next'), 1600);
+  toast(rows.length === 1 ? '1 more agent needs you' : `${rows.length} more agents need you`);
+}
+
+// ----- one line at the top of the feed: message an agent without finding its post -----
+// It goes to the agent waiting on you in that project if there is one, else to the project's agents.
+function topComposer() {
+  const scoped = state.feedProject;
+  const waiting = [...state.events.values()].filter((e) => e.needs_you && !e.resolved).sort((a, b) => b.id - a.id);
+  const names = [...state.projects.keys()].sort();
+  const fallback = scoped || waiting[0]?.project || threads('')[0]?.head.project || names[0] || '';
+  const project = scoped || (names.includes(state.topProject) ? state.topProject : fallback);
+  if (!project) return null;
+  const need = waiting.find((e) => e.project === project && e.session_id);
+  if (!state.topOpen) {
+    return h(
+      'button',
+      {
+        class: 'top-compose',
+        type: 'button',
+        onclick: () => {
+          state.topOpen = true;
+          render();
+          document.querySelector('#view [data-draft="top"]')?.focus();
+        },
+      },
+      avatar(project),
+      h('span', { class: 'tc-ph', text: need ? `Answer ${project}…` : `Message ${project}…` })
+    );
+  }
+  const ta = draftField('textarea', 'top', { placeholder: need ? `Answer: ${need.summary}` : `Tell the agents on ${project} what to do next`, 'aria-label': 'Message for an agent', rows: '2' });
+  const pick = scoped
+    ? h('span', { class: 'tc-name', text: project })
+    : h(
+        'select',
+        {
+          class: 'tc-proj',
+          'aria-label': 'Project',
+          onchange: (ev) => {
+            state.topProject = ev.target.value;
+            render();
+          },
+        },
+        ...names.map((n) => {
+          const o = h('option', { value: n, text: n });
+          o.selected = n === project;
+          return o;
+        })
+      );
+  return h(
+    'form',
+    {
+      class: 'composer top-compose open',
+      onsubmit: async (ev) => {
+        ev.preventDefault();
+        const prompt = ta.value.trim();
+        if (!prompt) return;
+        const path = need ? `/api/events/${need.id}/reply` : `/api/projects/${encodeURIComponent(project)}/reply`;
+        const row = await api(path, { method: 'POST', body: JSON.stringify({ prompt }) });
+        state.replies.set(row.id, row);
+        state.drafts.delete('top');
+        state.topOpen = false;
+        toast(`Sent to ${project}`);
+        render();
+      },
+    },
+    h(
+      'div',
+      { class: 'tc-row' },
+      avatar(project),
+      pick,
+      h('button', {
+        class: 'act',
+        type: 'button',
+        text: 'Cancel',
+        onclick: () => {
+          state.topOpen = false;
+          render();
+        },
+      })
+    ),
+    ta,
+    quickChips(ta, 'top'),
+    h('p', { class: 'hint', text: need ? 'Goes to the agent waiting on you here.' : state.wake ? 'An idle agent is woken with this.' : "Picked up at the agent's next turn." }),
     h('button', { type: 'submit', text: 'Send' })
   );
 }
 
-async function resolve(id) {
+async function resolve(id, { advance = false } = {}) {
   const row = await api(`/api/events/${id}/resolve`, { method: 'POST' });
   state.events.set(row.id, row);
   scheduleRefresh();
   render();
+  if (advance) moveToNextNeed();
 }
 
 // ---------- project dialog ----------
@@ -1087,7 +1280,7 @@ keys = installShortcuts({
   },
   resolve(key) {
     const id = this.postInfo(key)?.needId;
-    if (id) resolve(id);
+    if (id) resolve(id, { advance: true });
   },
   toggleQuiet: () => !$('quiet').hidden && $('quiet').click(),
   toggleDock,
