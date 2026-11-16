@@ -156,9 +156,15 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 1, 'the buzzer stay
 assert.equal(await p.locator('#dockSheet .dk-to b').textContent(), 'trailmap');
 assert.ok(await p.locator('.scope-plan').count(), 'project link on the scope header');
 // coming back to a project: where you left off, with the next action, right under the header
+await p.keyboard.press('Escape'); // close the buzzer's tray, still open from picking the project
 await p.waitForSelector('.leftoff');
-assert.match(await p.locator('.leftoff .lo-title').textContent(), /Where you left off/);
-assert.ok(await p.locator('.leftoff .lo-next .lo-text').textContent(), 'a next action');
+assert.ok(await p.locator('.leftoff .lo-line').textContent(), 'a next action on one line');
+assert.ok((await p.locator('.leftoff').boundingBox()).height < 60, 'folded: it takes one slim line');
+await p.tap('.leftoff .lo-toggle');
+assert.equal(await p.locator('.leftoff .lo-body').count(), 1, 'a tap unfolds the details');
+await p.tap('.leftoff .lo-toggle');
+assert.equal(await p.locator('.leftoff .lo-body').count(), 0, 'and folds them again');
+await p.tap('#dockBtn');
 
 // back to everything from the buzzer, and Escape closes it
 await p.tap('.dk-pill.all');

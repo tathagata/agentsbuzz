@@ -1,5 +1,5 @@
 // Caches the app shell only. Event data always comes from the network.
-const CACHE = 'buzz-shell-v12'; // v12: where you left off
+const CACHE = 'buzz-shell-v13'; // v13: left-off folded to one line
 const SHELL = ['/', '/style.css', '/app.js', '/md.js', '/avatar.js', '/keys.js', '/suggest.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (e) => {

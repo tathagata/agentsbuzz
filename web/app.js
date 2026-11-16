@@ -753,24 +753,14 @@ async function sendNext(name, n) {
   render();
 }
 
-function nextAction(name, n) {
-  const LABEL = { answer: 'Answer', question: 'Answer', fix: 'Fix', proposal: 'Next', continue: 'Continue', waiting: 'Waiting', start: 'Start' };
-  // an answer or a question from the agent gets the one-tap answers; the rest get one button
-  let actions = null;
+// The buttons for the next action: one-tap answers for a question, else one button.
+function nextActions(name, n) {
   if (n.kind === 'answer' || n.kind === 'question') {
-    const e = { id: n.event_id, project: name, summary: n.text, body: n.body || '', session_id: n.project_note ? '' : 'yes', needs_you: n.kind === 'answer' ? 1 : 0, resolved: 0 };
-    actions = answerChips(e);
-  } else if (n.reply) {
-    const word = { fix: 'Fix', proposal: 'Go', continue: 'Continue' }[n.kind] || 'Go';
-    actions = buttonRow('answers', 'Next action', [emojiButton('go', word, { title: n.reply, 'aria-label': n.reply, onclick: () => sendNext(name, n) })]);
+    return answerChips({ id: n.event_id, project: name, summary: n.text, body: n.body || '', session_id: n.project_note ? '' : 'yes', needs_you: n.kind === 'answer' ? 1 : 0, resolved: 0 });
   }
-  return h(
-    'div',
-    { class: `lo-next ${n.kind}` },
-    h('div', { class: 'lo-label', text: LABEL[n.kind] || 'Next' }),
-    h('p', { class: 'lo-text', text: n.kind === 'waiting' ? `Your message is waiting: “${n.text}”` : n.text }),
-    actions
-  );
+  if (!n.reply) return null;
+  const word = { fix: 'Fix', proposal: 'Go', continue: 'Continue' }[n.kind] || 'Go';
+  return buttonRow('answers', 'Next action', [emojiButton('go', word, { title: n.reply, 'aria-label': n.reply, onclick: () => sendNext(name, n) })]);
 }
 
 function metricTiles(m) {
@@ -789,19 +779,52 @@ function metricTiles(m) {
   );
 }
 
+// Folded by default to one slim line under the project header: the next action and how long ago.
+// Tap the line to unfold the agent's last word, the last commit, the answers and the 30-day numbers.
 function leftOffCard(name, { full = false } = {}) {
   const lo = leftOffFor(name);
   if (!lo) return null;
   const { summary: s, next: n, metrics: m } = lo;
   if (!s.last_ts) return null;
+  const key = `lo:${name}`;
+  const open = state.expanded.has(key);
+  const LABEL = { answer: 'Answer', question: 'Answer', fix: 'Fix', proposal: 'Next', continue: 'Continue', waiting: 'Waiting', start: 'Start' };
+  const quick = !open && n.reply ? emojiButton('go', { fix: 'Fix', proposal: 'Go', continue: 'Continue' }[n.kind] || 'Go', { class: 'ebtn lo-go', title: n.reply, 'aria-label': n.reply, onclick: () => sendNext(name, n) }) : null;
+  const row = h(
+    'div',
+    { class: 'lo-row' },
+    h(
+      'button',
+      {
+        class: 'lo-toggle',
+        type: 'button',
+        'aria-expanded': String(open),
+        'aria-label': `Where you left off: ${LABEL[n.kind] || 'Next'}: ${n.text}`,
+        onclick: () => {
+          open ? state.expanded.delete(key) : state.expanded.add(key);
+          render();
+        },
+      },
+      icon(open ? 'down' : 'right'),
+      h('span', { class: `lo-label ${n.kind}`, text: LABEL[n.kind] || 'Next' }),
+      h('span', { class: 'lo-line', text: n.kind === 'waiting' ? `Your message is waiting: “${n.text}”` : n.text }),
+      h('span', { class: 'lo-when', text: ago(s.last_ts) })
+    ),
+    quick
+  );
+  if (!open) return h('section', { class: 'leftoff', style: `--c:${color(name)}` }, row);
   return h(
     'section',
-    { class: `leftoff${full ? ' full' : ''}`, style: `--c:${color(name)}` },
-    h('div', { class: 'lo-head' }, h('h2', { class: 'lo-title', text: 'Where you left off' }), h('span', { class: 'lo-when', text: agoText(s.last_ts) })),
-    s.agent ? h('p', { class: 'lo-said' }, h('b', { text: `${s.agent.name}: ` }), s.agent.text) : null,
-    full && s.commit ? h('p', { class: 'lo-commit', text: `Last commit ${agoText(s.commit.ts)}: ${s.commit.text}` }) : null,
-    nextAction(name, n),
-    full ? metricTiles(m) : null
+    { class: 'leftoff open', style: `--c:${color(name)}` },
+    row,
+    h(
+      'div',
+      { class: 'lo-body' },
+      s.agent ? h('p', { class: 'lo-said' }, h('b', { text: `${s.agent.name}, ${agoText(s.agent.ts)}: ` }), s.agent.text) : null,
+      s.commit ? h('p', { class: 'lo-commit', text: `Last commit ${agoText(s.commit.ts)}: ${s.commit.text}` }) : null,
+      nextActions(name, n),
+      full ? metricTiles(m) : null
+    )
   );
 }
 
@@ -1217,6 +1240,8 @@ const ICONS = {
   explain: ['C12 12 9', 'M9.6 9.2a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5', 'M12 16.8h.01'],
   stop: ['C12 12 9', 'M9.5 9.5h5v5h-5z'],
   yes: ['M5 12.5l4.5 4.5L19 7'],
+  right: ['M10 6l6 6-6 6'],
+  down: ['M6 10l6 6 6-6'],
   send: ['M12 19V5', 'M6 11l6-6 6 6'],
   no: ['M6.5 6.5l11 11', 'M17.5 6.5l-11 11'],
 };
