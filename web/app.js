@@ -1031,14 +1031,51 @@ function composer(head, key) {
     ta,
     quickChips(ta, `reply:${key}`),
     h('p', { class: 'hint', text: state.wake ? 'If the agent is idle, it is woken up to handle this.' : 'Delivered when the agent next starts or finishes a turn. To wake idle agents: ./buzz wake on' }),
-    waiting ? h('button', { type: 'submit', value: 'handled', class: 'secondary', title: 'Send, and mark it handled', 'aria-label': 'Send, and mark it handled', text: '✅ Handled' }) : null,
+    waiting ? h('button', { type: 'submit', value: 'handled', class: 'secondary', title: 'Send, and mark it handled', 'aria-label': 'Send, and mark it handled', text: '✓ Handled' }) : null,
     h('button', { type: 'submit', value: 'send', text: 'Send' })
   );
 }
 
-// An emoji and at most one word, in a row of equal cells: it always fits, and never scrolls sideways.
-function emojiButton(emoji, word, props) {
-  return h('button', { class: 'ebtn', type: 'button', ...props }, h('span', { class: 'em', 'aria-hidden': 'true', text: emoji }), h('span', { class: 'wd', text: word }));
+// A small line icon and at most one word, light like "Reply". A row of them shrinks its words
+// before it would ever spill over, and never scrolls sideways.
+const ICONS = {
+  go: ['M5 12h14', 'M13 6l6 6-6 6'],
+  test: ['M9 3h6', 'M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3', 'M7.5 15h9'],
+  pr: ['M6 8.5v7', 'M18 15.5V10a3 3 0 0 0-3-3h-4', 'M13 4.5L10.5 7 13 9.5', 'C6 6 2.2', 'C6 18 2.2', 'C18 18 2.2'],
+  explain: ['C12 12 9', 'M9.6 9.2a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5', 'M12 16.8h.01'],
+  stop: ['C12 12 9', 'M9.5 9.5h5v5h-5z'],
+  yes: ['M5 12.5l4.5 4.5L19 7'],
+  no: ['M6.5 6.5l11 11', 'M17.5 6.5l-11 11'],
+};
+function icon(name) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const add = (tag, attrs) => {
+    const el = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    svg.append(el);
+  };
+  const n = /^n(\d)$/.exec(name);
+  if (n) {
+    add('circle', { cx: 12, cy: 12, r: 9 });
+    const t = document.createElementNS(ns, 'text');
+    for (const [k, v] of Object.entries({ x: 12, y: 16, 'text-anchor': 'middle', class: 'num' })) t.setAttribute(k, v);
+    t.textContent = n[1];
+    svg.append(t);
+    return svg;
+  }
+  for (const d of ICONS[name] || []) {
+    if (d.startsWith('C')) {
+      const [cx, cy, r] = d.slice(1).trim().split(' ');
+      add('circle', { cx, cy, r });
+    } else add('path', { d });
+  }
+  return svg;
+}
+function emojiButton(iconName, word, props) {
+  return h('button', { class: 'ebtn', type: 'button', ...props }, icon(iconName), h('span', { class: 'wd', text: word }));
 }
 const buttonRow = (cls, label, buttons) => h('div', { class: cls, role: 'group', 'aria-label': label, style: `--n:${buttons.length}` }, ...buttons);
 
@@ -1048,7 +1085,7 @@ function quickChips(ta, draftKey) {
     'quick',
     'Quick replies',
     QUICK_REPLIES.map((q) =>
-      emojiButton(q.emoji, q.word, {
+      emojiButton(q.icon, q.word, {
         title: q.text,
         'aria-label': q.text,
         onclick: () => {
@@ -1073,7 +1110,7 @@ function answerChips(e) {
   return buttonRow(
     'answers',
     'Quick answers',
-    suggestions(e.summary, e.body || '').map((s) => emojiButton(s.emoji, s.word, { disabled: pending, title: s.reply, 'aria-label': `${s.word}: ${s.reply}`, onclick: () => answer(e, s.reply) }))
+    suggestions(e.summary, e.body || '').map((s) => emojiButton(s.icon, s.word, { disabled: pending, title: s.reply, 'aria-label': `${s.word}: ${s.reply}`, onclick: () => answer(e, s.reply) }))
   );
 }
 function answer(e, reply) {

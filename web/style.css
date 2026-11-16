@@ -212,18 +212,22 @@ main { max-width: 640px; margin: 0 auto; }
 
 /* ---------- one-tap answers, quick replies, the top box, the toast ---------- */
 .answers, .quick {
-  display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); gap: 6px;
-  flex: 1 1 100%; width: 100%; margin-top: 8px;
+  display: flex; flex-wrap: nowrap; gap: 16px; align-items: center;
+  flex: 1 1 100%; min-width: 0; margin-top: 6px; overflow: hidden;
 }
-.answers { max-width: 360px; }
+/* quick replies: words never cut off; on the narrowest phones the row is icons only (names stay as labels) */
+.quick { gap: 8px; container-type: inline-size; }
+.quick .ebtn { flex: none; }
+@container (max-width: 266px) { .quick .ebtn .wd { display: none; } .quick .ebtn { padding: 4px 6px; } }
 .ebtn {
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-  min-width: 0; padding: 7px 2px 6px; border-radius: 12px;
-  border: 1px solid var(--line); background: var(--raise); color: var(--text); font: inherit;
+  display: inline-flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0;
+  padding: 4px 0; background: none; border: 0; color: var(--muted); font: inherit; font-size: 0.88rem;
 }
-.ebtn .em { font-size: 1.15rem; line-height: 1; }
-.ebtn .wd { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.74rem; font-weight: 600; }
-.answers .ebtn { border-color: color-mix(in srgb, var(--alert) 50%, transparent); }
+.ebtn:hover { color: var(--text); }
+.ebtn svg { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ebtn svg .num { fill: currentColor; stroke: none; font-size: 11px; font-weight: 700; }
+.ebtn .wd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.answers .ebtn { color: var(--alert); font-weight: 600; }
 .ebtn:disabled { opacity: 0.45; }
 .composer button.secondary { background: transparent; color: var(--alert); border: 1px solid color-mix(in srgb, var(--alert) 55%, transparent); }
 .need.next { animation: nextneed 1.6s ease-out; }
@@ -250,7 +254,7 @@ main { max-width: 640px; margin: 0 auto; }
 .tc-proj { background: var(--raise); color: var(--text); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font: inherit; font-weight: 600; max-width: 60%; }
 .tc-row .act { margin-left: auto; }
 /* inside a reply box, the emoji buttons and Cancel keep their own look, not the solid Send button's */
-.composer .ebtn { align-self: stretch; background: var(--raise); color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 7px 2px 6px; font-weight: 400; }
+.composer .ebtn { align-self: auto; background: none; color: var(--muted); border: 0; border-radius: 0; padding: 4px 0; font-weight: 400; }
 .composer .act { align-self: auto; background: none; color: var(--muted); border: 0; padding: 4px 0; font-weight: 500; }
 
 /* replies inside a thread */
