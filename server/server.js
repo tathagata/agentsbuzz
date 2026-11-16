@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { leftOff, WINDOW_DAYS } from '../lib/leftoff.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'web');
@@ -332,6 +333,29 @@ const server = http.createServer(async (req, res) => {
       const sql = `SELECT * FROM events ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ts DESC, id DESC LIMIT ?`;
       const rows = db.prepare(sql).all(...args, limit);
       return send(res, 200, { events: rows });
+    }
+
+    // Where you left off: a summary, the next action and 30-day numbers for one project (read only)
+    const lm = pathname.match(/^\/api\/projects\/([^/]+)\/summary$/);
+    if (lm && req.method === 'GET') {
+      const name = clip(decodeURIComponent(lm[1]), 80).trim();
+      if (!name) return send(res, 400, { error: 'project name required' });
+      const now = Date.now();
+      const cols = 'id, ts, harness, agent, session_id, kind, summary, body, needs_you, resolved';
+      const one = (where) => db.prepare(`SELECT ${cols} FROM events WHERE project = ? AND ${where} ORDER BY ts DESC, id DESC LIMIT 1`).get(name) || null;
+      return send(
+        res,
+        200,
+        leftOff({
+          now,
+          lastTs: db.prepare('SELECT MAX(ts) AS t FROM events WHERE project = ?').get(name)?.t || 0,
+          lastAgent: one(`harness != 'git' AND kind != 'started'`),
+          lastCommit: one(`harness = 'git'`),
+          open: db.prepare(`SELECT ${cols} FROM events WHERE project = ? AND needs_you = 1 AND resolved = 0 ORDER BY id DESC LIMIT 5`).all(name),
+          waiting: db.prepare('SELECT id, ts, prompt FROM replies WHERE project = ? AND delivered = 0 ORDER BY id DESC LIMIT 5').all(name),
+          recent: db.prepare('SELECT ts, harness, kind, needs_you, resolved FROM events WHERE project = ? AND ts >= ? ORDER BY ts DESC LIMIT 20000').all(name, now - WINDOW_DAYS * 86400000),
+        })
+      );
     }
 
     if (req.method === 'GET' && pathname === '/api/projects') {

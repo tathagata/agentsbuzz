@@ -154,7 +154,11 @@ assert.equal(await p.evaluate(() => location.hash), '#/f/trailmap');
 assert.equal(await p.locator('.post').evaluateAll((els) => els.every((e) => e.querySelector('.proj-link').textContent === 'trailmap')), true, 'feed narrowed to the project');
 assert.equal(await p.locator('.tray:not([hidden])').count(), 1, 'the buzzer stays open after choosing, with its text window addressed to the project');
 assert.equal(await p.locator('#dockSheet .dk-to b').textContent(), 'trailmap');
-assert.ok(await p.locator('.scope-plan').count(), 'plan link on the scope header');
+assert.ok(await p.locator('.scope-plan').count(), 'project link on the scope header');
+// coming back to a project: where you left off, with the next action, right under the header
+await p.waitForSelector('.leftoff');
+assert.match(await p.locator('.leftoff .lo-title').textContent(), /Where you left off/);
+assert.ok(await p.locator('.leftoff .lo-next .lo-text').textContent(), 'a next action');
 
 // back to everything from the buzzer, and Escape closes it
 await p.tap('.dk-pill.all');

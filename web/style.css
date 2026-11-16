@@ -686,3 +686,26 @@ dialog.khelp { padding: 18px calc(var(--pad) + 4px); max-height: 85vh; overflow-
 }
 .khelp form { margin-top: 14px; display: flex; justify-content: flex-end; }
 .khelp .ghost { background: transparent; color: var(--text); border: 1px solid var(--line); padding: 8px 18px; }
+
+/* ---------- where you left off ---------- */
+.leftoff {
+  margin: 12px var(--pad) 4px; padding: 12px 14px;
+  border: 1px solid var(--line); border-left: 3px solid var(--c); border-radius: var(--radius);
+  background: var(--surface);
+}
+.lo-head { display: flex; align-items: baseline; gap: 8px; }
+.lo-title { margin: 0; font-size: 0.95rem; font-weight: 800; }
+.lo-when { margin-left: auto; color: var(--muted); font-size: 0.82rem; }
+.lo-said, .lo-commit { margin: 8px 0 0; line-height: 1.4; overflow-wrap: anywhere; }
+.lo-said b { font-weight: 700; color: var(--muted); }
+.lo-commit { color: var(--muted); font-size: 0.88rem; }
+.lo-next { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.lo-label { font-size: 0.75rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--alert); }
+.lo-next.waiting .lo-label, .lo-next.start .lo-label { color: var(--muted); }
+.lo-text { margin: 3px 0 0; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.lo-metrics { margin-top: 12px; }
+.lo-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.lo-tile { display: flex; flex-direction: column; align-items: center; padding: 8px 2px; border-radius: 10px; background: var(--raise); min-width: 0; }
+.lo-tile b { font-size: 1.25rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.lo-tile span { font-size: 0.74rem; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lo-period { margin: 6px 0 0; text-align: right; color: var(--muted); font-size: 0.74rem; }

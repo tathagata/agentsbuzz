@@ -40,6 +40,7 @@ const state = {
   expanded: new Set(),
   composing: new Set(),
   dockTarget: '', // who the buzzer's text window sends to, once you pick a project
+  leftoff: new Map(), // project -> { data, at }: where you left off, from /api/projects/:name/summary
   keepDockOpen: false, // set while a project picked in the buzzer opens, so the tray stays up
   drafts: new Map(),
   cursors: new Map(), // scope -> { oldest, done, loaded }
@@ -130,7 +131,7 @@ function nowLine(p) {
   if (doing) return `Now: ${doing.title}`;
   const next = p.plan.find((s) => s.status === 'todo');
   if (next) return `Next: ${next.title}`;
-  return p.plan.length ? 'Plan complete' : 'No plan yet';
+  return p.plan.length ? 'Plan complete' : ''; // no plan: say nothing; "where you left off" covers it
 }
 
 function quietFor(p) {
@@ -572,7 +573,7 @@ function projectRow(p) {
           p.needs ? h('span', { class: 'badge', text: `${p.needs} needs you` }) : null,
           h('span', { class: 'ptime', text: last })
         ),
-        h('div', { class: 'pnow', text: nowLine(p) }),
+        nowLine(p) ? h('div', { class: 'pnow', text: nowLine(p) }) : null,
         c.total ? h('div', { class: 'pprog' }, progressBar(p.plan), h('span', { text: `${c.done} of ${c.total}` })) : null,
         quiet
           ? h('div', { class: 'pquiet', text: `Quiet for ${quiet} days` })
@@ -604,7 +605,7 @@ function renderProject(name) {
       { class: 'hero-body' },
       h('div', { class: 'hero-line' }, h('span', { class: `pill ${p.status}`, text: STATUS_LABEL[p.status] }), quiet ? h('span', { class: 'pquiet', text: `Quiet for ${quiet} days` }) : null),
       p.description ? h('p', { class: 'desc', text: p.description }) : h('p', { class: 'desc muted', text: 'No description yet. Tap Edit to add one.' }),
-      h('p', { class: 'pnow', text: nowLine(p) })
+      nowLine(p) ? h('p', { class: 'pnow', text: nowLine(p) }) : null
     )
   );
 
@@ -660,7 +661,8 @@ function renderProject(name) {
       : h('p', { class: 'empty', text: cursor(name).loaded ? 'No updates yet. Agents working on this project will post here.' : 'Loading' })
   );
 
-  return [hero, needsLane(name), plan, notesSection(name), feed].filter(Boolean);
+  // the hand-kept plan only shows if a project has one; "where you left off" keeps itself up to date
+  return [hero, leftOffCard(name, { full: true }), needsLane(name), c.total ? plan : null, notesSection(name), feed].filter(Boolean);
 }
 
 function notesSection(name) {
@@ -697,6 +699,7 @@ function renderFeed() {
   const list = threads(state.feedProject);
   return [
     state.feedProject ? scopeHeader(state.feedProject) : null,
+    state.feedProject ? leftOffCard(state.feedProject) : null,
     needsLane(state.feedProject),
     list.length
       ? postList(state.feedProject, list)
@@ -719,7 +722,86 @@ function scopeHeader(name) {
       p ? h('div', { class: 'scope-sub', text: [STATUS_LABEL[p.status], nowLine(p)].filter(Boolean).join(' · ') }) : null,
       c.total ? h('div', { class: 'pprog' }, progressBar(p.plan), h('span', { text: `${c.done} of ${c.total}` })) : null
     ),
-    h('a', { class: 'scope-plan', href: projectHref(name), text: 'Plan' })
+    h('a', { class: 'scope-plan', href: projectHref(name), text: 'Project' })
+  );
+}
+
+// ----- where you left off -----
+// For coming back to a project after a while: the agent's last word, what to do next (one tap),
+// and what got done in the last 30 days. Worked out by the server from the feed it already has.
+const agoText = (ts) => (ago(ts) === 'now' ? 'just now' : `${ago(ts)} ago`);
+function leftOffFor(name) {
+  const have = state.leftoff.get(name);
+  if (!have || (Date.now() - have.at > 60000 && !have.loading)) {
+    state.leftoff.set(name, { ...(have || {}), at: Date.now(), loading: true });
+    api(`/api/projects/${encodeURIComponent(name)}/summary`)
+      .then((data) => {
+        state.leftoff.set(name, { data, at: Date.now() });
+        requestRender();
+      })
+      .catch(() => state.leftoff.set(name, { ...(state.leftoff.get(name) || {}), loading: false }));
+  }
+  return have?.data || null;
+}
+
+async function sendNext(name, n) {
+  const path = n.event_id && !n.project_note ? `/api/events/${n.event_id}/reply` : `/api/projects/${encodeURIComponent(name)}/reply`;
+  const row = await api(path, { method: 'POST', body: JSON.stringify({ prompt: n.reply }) });
+  state.replies.set(row.id, row);
+  state.leftoff.delete(name);
+  toast(`Sent to ${name}`);
+  render();
+}
+
+function nextAction(name, n) {
+  const LABEL = { answer: 'Answer', question: 'Answer', fix: 'Fix', proposal: 'Next', continue: 'Continue', waiting: 'Waiting', start: 'Start' };
+  // an answer or a question from the agent gets the one-tap answers; the rest get one button
+  let actions = null;
+  if (n.kind === 'answer' || n.kind === 'question') {
+    const e = { id: n.event_id, project: name, summary: n.text, body: n.body || '', session_id: n.project_note ? '' : 'yes', needs_you: n.kind === 'answer' ? 1 : 0, resolved: 0 };
+    actions = answerChips(e);
+  } else if (n.reply) {
+    const word = { fix: 'Fix', proposal: 'Go', continue: 'Continue' }[n.kind] || 'Go';
+    actions = buttonRow('answers', 'Next action', [emojiButton('go', word, { title: n.reply, 'aria-label': n.reply, onclick: () => sendNext(name, n) })]);
+  }
+  return h(
+    'div',
+    { class: `lo-next ${n.kind}` },
+    h('div', { class: 'lo-label', text: LABEL[n.kind] || 'Next' }),
+    h('p', { class: 'lo-text', text: n.kind === 'waiting' ? `Your message is waiting: “${n.text}”` : n.text }),
+    actions
+  );
+}
+
+function metricTiles(m) {
+  const tiles = [
+    [m.commits, m.commits === 1 ? 'Commit' : 'Commits'],
+    [m.turns, 'Done'],
+    [m.milestones + m.prs, 'Shipped'],
+    [m.active_days, m.active_days === 1 ? 'Day' : 'Days'],
+  ];
+  if (tiles.every(([v]) => !v)) return null;
+  return h(
+    'div',
+    { class: 'lo-metrics' },
+    h('div', { class: 'lo-tiles', role: 'list', 'aria-label': `Last ${m.days} days` }, ...tiles.map(([v, w]) => h('div', { class: 'lo-tile', role: 'listitem' }, h('b', { text: String(v) }), h('span', { text: w })))),
+    h('p', { class: 'lo-period', text: `Last ${m.days} days` })
+  );
+}
+
+function leftOffCard(name, { full = false } = {}) {
+  const lo = leftOffFor(name);
+  if (!lo) return null;
+  const { summary: s, next: n, metrics: m } = lo;
+  if (!s.last_ts) return null;
+  return h(
+    'section',
+    { class: `leftoff${full ? ' full' : ''}`, style: `--c:${color(name)}` },
+    h('div', { class: 'lo-head' }, h('h2', { class: 'lo-title', text: 'Where you left off' }), h('span', { class: 'lo-when', text: agoText(s.last_ts) })),
+    s.agent ? h('p', { class: 'lo-said' }, h('b', { text: `${s.agent.name}: ` }), s.agent.text) : null,
+    full && s.commit ? h('p', { class: 'lo-commit', text: `Last commit ${agoText(s.commit.ts)}: ${s.commit.text}` }) : null,
+    nextAction(name, n),
+    full ? metricTiles(m) : null
   );
 }
 
@@ -1324,6 +1406,7 @@ function connect() {
   es.addEventListener('event', (m) => {
     const ev = JSON.parse(m.data);
     ingest(ev);
+    state.leftoff.delete(ev.project); // its "where you left off" is out of date
     scheduleRefresh();
     if (scrollY > 400 && state.route.page !== 'home') {
       state.unseen++;

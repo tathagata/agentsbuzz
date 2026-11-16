@@ -88,6 +88,12 @@ test('the web app sets no inline style attributes, so the CSP needs no unsafe-in
   assert.doesNotMatch(html, /<style|\sstyle=|\son[a-z]+=/i, 'no inline styles or handlers');
 });
 
+test("a project's summary (what its agents last said) is not readable without the token", async () => {
+  assert.equal((await raw(port, '/api/projects/alpha/summary')).status, 401);
+  assert.equal((await raw(port, '/api/projects/alpha/summary', { authorization: 'Bearer wrong' })).status, 401);
+  assert.equal((await raw(port, '/api/projects/alpha/summary', bearer)).status, 200);
+});
+
 test('a wrong token, or one of a different length, is refused', async () => {
   for (const t of ['x', `${TOKEN}x`, TOKEN.slice(0, -1), '']) {
     const r = await raw(port, '/api/events', { authorization: `Bearer ${t}` });
