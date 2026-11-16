@@ -216,16 +216,19 @@ main { max-width: 640px; margin: 0 auto; }
   flex: 1 1 100%; min-width: 0; margin-top: 6px; overflow: hidden;
 }
 /* quick replies: words never cut off; on the narrowest phones the row is icons only (names stay as labels) */
-.quick { gap: 8px; container-type: inline-size; }
+.quick { gap: 7px; container-type: inline-size; }
 .quick .ebtn { flex: none; }
 @container (max-width: 266px) { .quick .ebtn .wd { display: none; } .quick .ebtn { padding: 4px 6px; } }
 .ebtn {
-  display: inline-flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0;
+  display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0;
   padding: 4px 0; background: none; border: 0; color: var(--muted); font: inherit; font-size: 0.88rem;
 }
 .ebtn:hover { color: var(--text); }
-.ebtn svg { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.ebtn svg .num { fill: currentColor; stroke: none; font-size: 11px; font-weight: 700; }
+/* the icon carries the action: heavier and a shade brighter than its word */
+.ebtn svg { flex: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; color: color-mix(in srgb, var(--text) 80%, var(--muted)); }
+.ebtn svg .num { fill: currentColor; stroke: none; font-size: 11.5px; font-weight: 800; }
+.answers .ebtn svg { color: var(--alert); }
+.ebtn:hover svg { color: var(--text); }
 .ebtn .wd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .answers .ebtn { color: var(--alert); font-weight: 600; }
 .ebtn:disabled { opacity: 0.45; }
