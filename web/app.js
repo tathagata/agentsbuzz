@@ -755,6 +755,7 @@ function renderDock() {
   $('scrim').hidden = !state.dockOpen;
   const tray = $('tray');
   tray.hidden = !state.dockOpen;
+  $('dockSheet').hidden = !state.dockOpen;
   if (!state.dockOpen) return;
 
   const now = Date.now();
@@ -775,7 +776,7 @@ function renderDock() {
   const pick = (name) => {
     state.dockTarget = name;
     renderDock();
-    document.querySelector('#tray [data-draft="dock"]')?.focus();
+    document.querySelector('#dockSheet [data-draft="dock"]')?.focus();
   };
   const pill = (label, hash, { c, n, u, current, cls = '', live, name } = {}) =>
     h(
@@ -798,8 +799,7 @@ function renderDock() {
   const keep = tray.scrollTop;
   tray.replaceChildren(
     ...[
-    // nearest the thumb: a quick text window, then everything and the plans overview
-    target ? dockCompose(target) : null,
+    // nearest the thumb: everything, and the plans overview
     h('div', { class: 'dk-row' }, pill('All', '#/', { current: !scope && state.route.page === 'feed', n: totalNeeds, u: totalUnread, cls: 'all' }), pill('Plans', '#/projects', { current: state.route.page === 'home', cls: 'plans' })),
     ...active.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], u: unreadBy[p.name], current: p.name === scope, live: p.last_ts && now - p.last_ts < LIVE_MS, name: p.name })),
     quiet.length
@@ -819,6 +819,16 @@ function renderDock() {
   ].filter(Boolean)
   );
   tray.scrollTop = keep;
+  // the text window is a sheet along the bottom edge, apart from the project list, which scrolls on its own
+  const sheet = $('dockSheet');
+  sheet.replaceChildren(...(target ? [dockCompose(target)] : []));
+  sheet.hidden = !target;
+  sizeSheet();
+}
+// the buzzer and its project list sit just above the sheet, however tall the text gets
+function sizeSheet() {
+  const sheet = $('dockSheet');
+  document.documentElement.style.setProperty('--sheet-h', `${sheet.hidden ? 0 : sheet.offsetHeight}px`);
 }
 
 // Who the buzzer's text window sends to: the project you picked, else the one you are looking at,
@@ -840,6 +850,7 @@ function dockCompose(project) {
   const fit = () => {
     ta.style.height = 'auto';
     ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
+    sizeSheet();
   };
   const send = async () => {
     const prompt = ta.value.trim();
@@ -879,9 +890,8 @@ function dockCompose(project) {
         send();
       },
     },
-    avatar(project),
-    ta,
-    h('button', { type: 'submit', class: 'dk-send', 'aria-label': `Send to ${project}`, title: `Send to ${project}` }, icon('send'))
+    h('div', { class: 'dk-to' }, h('span', { text: need ? 'Answer' : 'To' }), h('span', { class: 'dot' }), h('b', { text: project })),
+    h('div', { class: 'dk-field' }, ta, h('button', { type: 'submit', class: 'dk-send', 'aria-label': `Send to ${project}`, title: `Send to ${project}` }, icon('send')))
   );
 }
 

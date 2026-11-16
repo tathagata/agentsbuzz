@@ -246,25 +246,39 @@ main { max-width: 640px; margin: 0 auto; }
 .toast button { background: none; border: 0; color: inherit; font-weight: 800; text-decoration: underline; padding: 0; }
 .composer .spacer { flex: 1 1 0; }
 
-/* the buzzer's text window: nearest the thumb, sends to the highlighted project */
-.dk-compose {
+/* the buzzer's text window: a sheet along the bottom edge, a different shape from the project pills.
+   The pills scroll on their own above it; the sheet stays put. */
+.dk-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 21;
+  background: var(--surface); border-top: 1px solid var(--line); border-radius: 18px 18px 0 0;
+  padding: 10px max(14px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
+  animation: sheetup 0.16s ease-out;
+}
+.dk-sheet[hidden] { display: none; }
+@keyframes sheetup { from { transform: translateY(16px); opacity: 0; } }
+.dk-compose { max-width: 640px; margin: 0 auto; }
+.dk-to { display: flex; align-items: center; gap: 6px; margin: 0 2px 6px; font-size: 0.82rem; color: var(--muted); }
+.dk-to .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+.dk-to b { color: var(--text); font-weight: 700; }
+.dk-field {
   display: flex; align-items: flex-end; gap: 8px;
-  width: min(340px, calc(100vw - 28px));
-  padding: 6px 6px 6px 8px;
-  background: var(--surface); border: 1px solid var(--c, var(--line)); border-radius: 22px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 4px 4px 4px 12px;
 }
-.dk-compose .avatar { width: 30px; height: 30px; font-size: 0.7rem; flex: none; margin-bottom: 1px; }
-.dk-compose textarea {
-  flex: 1; min-width: 0; min-height: 32px; max-height: 120px; resize: none;
-  background: none; border: 0; color: var(--text); font: inherit; line-height: 1.35; padding: 6px 2px;
+.dk-field:focus-within { border-color: var(--c); }
+.dk-field textarea {
+  flex: 1; min-width: 0; min-height: 34px; max-height: 120px; resize: none;
+  background: none; border: 0; color: var(--text); font: inherit; line-height: 1.35; padding: 7px 0;
 }
-.dk-compose textarea:focus { outline: none; }
+.dk-field textarea:focus { outline: none; }
 .dk-send {
-  flex: none; width: 32px; height: 32px; border-radius: 50%; border: 0;
+  flex: none; width: 36px; height: 36px; border-radius: 9px; border: 0;
   display: grid; place-items: center; background: var(--c, var(--text)); color: #0b1220;
 }
 .dk-send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+/* with the sheet open, the buzzer and its project list sit above it */
+.dock.open { bottom: calc(var(--sheet-h, 0px) + 12px); }
+.dock.open .tray { max-height: min(52vh, 440px); }
 /* while you type, project pills become "send to" choices */
 .dk-pill.pickable { border-style: dashed; }
 .dk-pill.target { border-style: solid; border-color: var(--c); box-shadow: 0 0 0 2px var(--c), 0 3px 12px rgba(0, 0, 0, 0.3); }
@@ -592,7 +606,7 @@ body[data-page="feed"] .top { position: static; backdrop-filter: none; -webkit-b
 @keyframes pop { from { opacity: 0; transform: translateY(10px) scale(0.96); } to { opacity: 1; transform: none; } }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .tray, .scrim { animation: none; }
+  .tray, .scrim, .dk-sheet { animation: none; }
   .dock-btn { transition: none; }
 }
 

@@ -349,7 +349,7 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   // the buzzer opens a text window: it answers the agent waiting on you, and while you type the
   // project pills pick who it goes to instead of opening the project
   await p.locator('#dockBtn').tap();
-  const dockTa = p.locator('#tray .dk-compose textarea');
+  const dockTa = p.locator('#dockSheet textarea');
   assert.equal(await dockTa.getAttribute('placeholder'), 'Answer latency-lab…');
   await dockTa.tap();
   await p.keyboard.type('Use the staging capture from Monday');
@@ -360,6 +360,11 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   assert.match(await p.locator('#tray .dk-pill[data-name="trailmap"]').getAttribute('class'), /\btarget\b/);
   assert.equal(await dockTa.getAttribute('placeholder'), 'Message trailmap…');
   assert.equal(await p.evaluate(() => { const t = document.getElementById('tray'); return t.scrollWidth > t.clientWidth + 1; }), false, 'the tray never spills over');
+  // the text window is its own sheet, not one of the scrolling project pills
+  assert.equal(await p.locator('#tray textarea').count(), 0, 'the project list holds only projects');
+  const sheetTop = await p.locator('#dockSheet').evaluate((e) => e.getBoundingClientRect().top);
+  await p.locator('#tray').evaluate((t) => t.scrollBy(0, -200));
+  assert.equal(await p.locator('#dockSheet').evaluate((e) => e.getBoundingClientRect().top), sheetTop, 'scrolling the projects leaves the text window where it is');
   await dockTa.press('Enter');
   await p.waitForFunction(() => document.getElementById('tray').hidden);
   const sent = (await (await fetch(BASE + '/api/replies?all=1')).json()).replies.find((r) => r.prompt === 'Use the staging capture from Monday');
