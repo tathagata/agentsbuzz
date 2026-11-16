@@ -40,6 +40,7 @@ const state = {
   expanded: new Set(),
   composing: new Set(),
   dockTarget: '', // who the buzzer's text window sends to, once you pick a project
+  keepDockOpen: false, // set while a project picked in the buzzer opens, so the tray stays up
   drafts: new Map(),
   cursors: new Map(), // scope -> { oldest, done, loaded }
   loading: false,
@@ -254,7 +255,8 @@ async function onRoute() {
   state.navDepth += 1;
   state.route = parseRoute();
   state.feedProject = state.route.page === 'feed' ? state.route.name : '';
-  state.dockOpen = false;
+  state.dockOpen = state.keepDockOpen; // picking a project in the buzzer keeps its text window up
+  state.keepDockOpen = false;
   const target = state.route.page === 'project' ? 0 : state.pos.get(location.hash || '#/') || 0;
   render();
   window.scrollTo(0, target);
@@ -756,7 +758,11 @@ function renderDock() {
   const tray = $('tray');
   tray.hidden = !state.dockOpen;
   $('dockSheet').hidden = !state.dockOpen;
-  if (!state.dockOpen) return;
+  if (!state.dockOpen) {
+    // a picked "To" lasts while you write; closed with nothing typed, the next open starts fresh
+    if (!(state.drafts.get('dock') || '').trim()) state.dockTarget = '';
+    return;
+  }
 
   const now = Date.now();
   const all = [...state.projects.values()];
@@ -765,30 +771,34 @@ function renderDock() {
   const active = all.filter(isActive).sort((a, b) => rank(b) - rank(a));
   const quiet = all.filter((p) => !isActive(p)).sort((a, b) => rank(b) - rank(a));
 
-  const typing = Boolean((state.drafts.get('dock') || '').trim());
   const target = dockTargetFor(scope, by);
-  const go = (hash) => {
-    state.dockOpen = false;
+  const go = (hash, { stay = false } = {}) => {
+    state.dockOpen = stay;
     if (location.hash === hash || (hash === '#/' && (location.hash === '' || location.hash === '#/feed'))) renderDock();
-    else location.hash = hash;
+    else {
+      state.keepDockOpen = stay;
+      location.hash = hash;
+    }
   };
-  // While you are typing in the text window, tapping a project sends it there instead of opening it.
-  const pick = (name) => {
+  // Tapping a project shows its feed behind the tray and makes it the "To" of the text window, which
+  // stays up (with anything already typed), so choosing where to send never closes what you are writing.
+  const pick = (name, hash) => {
+    // tapping the pill takes the focus first, so "were you writing" is whether you just left the text box
+    state.refocusDock = (state.drafts.get('dock') || '').trim() !== '' && Date.now() - (state.dockBlurAt || 0) < 1500;
     state.dockTarget = name;
-    renderDock();
-    document.querySelector('#dockSheet [data-draft="dock"]')?.focus();
+    go(hash, { stay: true });
   };
   const pill = (label, hash, { c, n, u, current, cls = '', live, name } = {}) =>
     h(
       'button',
       {
-        class: `dk-pill ${cls}${typing && name ? ' pickable' : ''}${typing && name && name === target ? ' target' : ''}`,
+        class: `dk-pill ${cls}${name && name === target ? ' target' : ''}`,
         type: 'button',
         role: 'menuitem',
         'aria-current': current ? 'true' : 'false',
         'data-name': name || null,
         style: c ? `--c:${c}` : '',
-        onclick: () => ((state.drafts.get('dock') || '').trim() && name ? pick(name) : go(hash)),
+        onclick: () => (name ? pick(name, hash) : go(hash, { stay: cls === 'all' })),
       },
       c ? h('span', { class: `dot${live ? ' live' : ''}` }) : null,
       h('span', { class: 'lbl', text: label }),
@@ -824,6 +834,10 @@ function renderDock() {
   sheet.replaceChildren(...(target ? [dockCompose(target)] : []));
   sheet.hidden = !target;
   sizeSheet();
+  if (state.refocusDock && target) {
+    state.refocusDock = false;
+    sheet.querySelector('[data-draft="dock"]')?.focus();
+  }
 }
 // the buzzer and its project list sit just above the sheet, however tall the text gets
 function sizeSheet() {
@@ -866,13 +880,8 @@ function dockCompose(project) {
   };
   ta.addEventListener('input', () => {
     fit();
-    // once there is text, the project pills become "send to" choices (changed in place, so typing keeps going)
-    const typing = Boolean(ta.value.trim());
-    for (const el of document.querySelectorAll('#tray .dk-pill[data-name]')) {
-      el.classList.toggle('pickable', typing);
-      el.classList.toggle('target', typing && el.dataset.name === project);
-    }
   });
+  ta.addEventListener('blur', () => (state.dockBlurAt = Date.now()));
   ta.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
       ev.preventDefault();

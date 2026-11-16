@@ -152,15 +152,14 @@ await p.tap('.dk-pill:has-text("trailmap")');
 await sleep(500);
 assert.equal(await p.evaluate(() => location.hash), '#/f/trailmap');
 assert.equal(await p.locator('.post').evaluateAll((els) => els.every((e) => e.querySelector('.proj-link').textContent === 'trailmap')), true, 'feed narrowed to the project');
-assert.equal(await p.locator('.tray:not([hidden])').count(), 0, 'dock closes after choosing');
+assert.equal(await p.locator('.tray:not([hidden])').count(), 1, 'the buzzer stays open after choosing, with its text window addressed to the project');
+assert.equal(await p.locator('#dockSheet .dk-to b').textContent(), 'trailmap');
 assert.ok(await p.locator('.scope-plan').count(), 'plan link on the scope header');
 
-// back to everything from the dock, and Escape closes it
-await p.tap('#dockBtn');
+// back to everything from the buzzer, and Escape closes it
 await p.tap('.dk-pill.all');
 await sleep(400);
 assert.equal(await p.locator('.scope').count(), 0);
-await p.tap('#dockBtn');
 await p.keyboard.press('Escape');
 assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
 // keyboard: move, act on a post, jump anywhere, all without the mouse
@@ -351,14 +350,21 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   await p.locator('#dockBtn').tap();
   const dockTa = p.locator('#dockSheet textarea');
   assert.equal(await dockTa.getAttribute('placeholder'), 'Answer latency-lab…');
+  // picking a project with nothing typed shows its feed and keeps the text window up, addressed to it
+  await p.locator('#tray .dk-pill[data-name="agentsbuzz"]').tap();
+  await p.waitForFunction(() => location.hash === '#/f/agentsbuzz' && document.querySelector('#dockSheet .dk-to b')?.textContent === 'agentsbuzz', null, { timeout: 3000 }).catch(() => {});
+  assert.equal(await p.locator('#tray:not([hidden])').count(), 1, 'the tray stays open after picking a project');
+  assert.equal(await p.locator('#dockSheet .dk-to b').textContent(), 'agentsbuzz', 'the To follows the picked project');
+  // and while writing: the text is kept, the cursor stays in the box
   await dockTa.tap();
   await p.keyboard.type('Use the staging capture from Monday');
   assert.equal(await dockTa.inputValue(), 'Use the staging capture from Monday', 'typing is not interrupted');
-  const hashBefore = await p.evaluate(() => location.hash);
   await p.locator('#tray .dk-pill[data-name="trailmap"]').tap();
-  assert.equal(await p.evaluate(() => location.hash), hashBefore, 'picking a project does not leave the page');
+  await p.waitForFunction(() => location.hash === '#/f/trailmap' && document.querySelector('#dockSheet .dk-to b')?.textContent === 'trailmap', null, { timeout: 3000 }).catch(() => {});
   assert.match(await p.locator('#tray .dk-pill[data-name="trailmap"]').getAttribute('class'), /\btarget\b/);
   assert.equal(await dockTa.getAttribute('placeholder'), 'Message trailmap…');
+  assert.equal(await dockTa.inputValue(), 'Use the staging capture from Monday', 'what you typed survives picking a project');
+  assert.equal(await p.evaluate(() => document.activeElement?.dataset?.draft), 'dock', 'the cursor is back in the text box');
   assert.equal(await p.evaluate(() => { const t = document.getElementById('tray'); return t.scrollWidth > t.clientWidth + 1; }), false, 'the tray never spills over');
   // the text window is its own sheet, not one of the scrolling project pills
   assert.equal(await p.locator('#tray textarea').count(), 0, 'the project list holds only projects');

@@ -1,5 +1,5 @@
 // Caches the app shell only. Event data always comes from the network.
-const CACHE = 'buzz-shell-v10'; // v10: text window as a bottom sheet
+const CACHE = 'buzz-shell-v11'; // v11: picking a project keeps the text window up
 const SHELL = ['/', '/style.css', '/app.js', '/md.js', '/avatar.js', '/keys.js', '/suggest.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (e) => {

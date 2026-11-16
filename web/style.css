@@ -279,8 +279,7 @@ main { max-width: 640px; margin: 0 auto; }
 /* with the sheet open, the buzzer and its project list sit above it */
 .dock.open { bottom: calc(var(--sheet-h, 0px) + 12px); }
 .dock.open .tray { max-height: min(52vh, 440px); }
-/* while you type, project pills become "send to" choices */
-.dk-pill.pickable { border-style: dashed; }
+/* the project the text window sends to */
 .dk-pill.target { border-style: solid; border-color: var(--c); box-shadow: 0 0 0 2px var(--c), 0 3px 12px rgba(0, 0, 0, 0.3); }
 /* inside a reply box, the emoji buttons and Cancel keep their own look, not the solid Send button's */
 .composer .ebtn { align-self: auto; background: none; color: var(--muted); border: 0; border-radius: 0; padding: 4px 0; font-weight: 400; }
