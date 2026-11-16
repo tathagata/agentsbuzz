@@ -244,18 +244,30 @@ main { max-width: 640px; margin: 0 auto; }
 }
 .toast[hidden] { display: none; }
 .toast button { background: none; border: 0; color: inherit; font-weight: 800; text-decoration: underline; padding: 0; }
-.top-compose {
-  display: flex; align-items: center; gap: 10px;
-  margin: 12px var(--pad) 4px; width: calc(100% - 2 * var(--pad));
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 10px 12px; color: var(--muted); font: inherit; text-align: left;
+.composer .spacer { flex: 1 1 0; }
+
+/* the buzzer's text window: nearest the thumb, sends to the highlighted project */
+.dk-compose {
+  display: flex; align-items: flex-end; gap: 8px;
+  width: min(340px, calc(100vw - 28px));
+  padding: 6px 6px 6px 8px;
+  background: var(--surface); border: 1px solid var(--c, var(--line)); border-radius: 22px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
-.top-compose .avatar { width: 32px; height: 32px; font-size: 0.72rem; flex: none; }
-.top-compose.open { color: var(--text); }
-.tc-row { display: flex; align-items: center; gap: 10px; flex: 1 1 100%; }
-.tc-name { font-weight: 700; }
-.tc-proj { background: var(--raise); color: var(--text); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font: inherit; font-weight: 600; max-width: 60%; }
-.tc-row .act { margin-left: auto; }
+.dk-compose .avatar { width: 30px; height: 30px; font-size: 0.7rem; flex: none; margin-bottom: 1px; }
+.dk-compose textarea {
+  flex: 1; min-width: 0; min-height: 32px; max-height: 120px; resize: none;
+  background: none; border: 0; color: var(--text); font: inherit; line-height: 1.35; padding: 6px 2px;
+}
+.dk-compose textarea:focus { outline: none; }
+.dk-send {
+  flex: none; width: 32px; height: 32px; border-radius: 50%; border: 0;
+  display: grid; place-items: center; background: var(--c, var(--text)); color: #0b1220;
+}
+.dk-send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+/* while you type, project pills become "send to" choices */
+.dk-pill.pickable { border-style: dashed; }
+.dk-pill.target { border-style: solid; border-color: var(--c); box-shadow: 0 0 0 2px var(--c), 0 3px 12px rgba(0, 0, 0, 0.3); }
 /* inside a reply box, the emoji buttons and Cancel keep their own look, not the solid Send button's */
 .composer .ebtn { align-self: auto; background: none; color: var(--muted); border: 0; border-radius: 0; padding: 4px 0; font-weight: 400; }
 .composer .act { align-self: auto; background: none; color: var(--muted); border: 0; padding: 4px 0; font-weight: 500; }

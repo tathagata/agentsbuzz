@@ -335,19 +335,35 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   assert.equal((await (await fetch(BASE + '/api/replies?all=1')).json()).replies.length, before, 'Undo sends nothing');
   assert.equal(await need.count(), 1, 'and the agent still needs you');
 
-  // the one-line box on top of the feed offers the agent waiting on you, and quick replies add to the text
-  const top = p.locator('button.top-compose');
-  assert.match(await top.textContent(), /^LL?.*Answer latency-lab…$/s);
-  await top.tap();
-  const form = p.locator('form.top-compose');
-  await form.locator('.quick .ebtn[aria-label="Run the tests"]').tap();
-  assert.equal(await form.locator('textarea').inputValue(), 'Run the tests.');
-  // button rows never spill over or scroll sideways
+  // quick replies in a post's Reply box add to the text, and rows of buttons never spill over
+  const replyPost = p.locator('.post', { hasText: 'next capture sample' });
+  await replyPost.locator('button.act', { hasText: /^Reply$/ }).tap();
+  await replyPost.locator('.quick .ebtn[aria-label="Run the tests"]').tap();
+  assert.equal(await replyPost.locator('.composer textarea').inputValue(), 'Run the tests.');
   const spill = await p.evaluate(() => [...document.querySelectorAll('.quick, .answers')].filter((r) => r.scrollWidth > r.clientWidth + 1).length);
   assert.equal(spill, 0, 'every row of buttons fits its box');
   assert.equal(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'no sideways scroll on the page');
-  await form.locator('button.act', { hasText: 'Cancel' }).tap();
-  assert.equal(await p.locator('form.top-compose').count(), 0, 'Cancel closes it');
+  await replyPost.locator('button.act', { hasText: /^Reply$/ }).tap();
+  assert.equal(await p.locator('.top-compose').count(), 0, 'no separate box on top of the feed: the buzzer has the text window');
+
+  // the buzzer opens a text window: it answers the agent waiting on you, and while you type the
+  // project pills pick who it goes to instead of opening the project
+  await p.locator('#dockBtn').tap();
+  const dockTa = p.locator('#tray .dk-compose textarea');
+  assert.equal(await dockTa.getAttribute('placeholder'), 'Answer latency-lab…');
+  await dockTa.tap();
+  await p.keyboard.type('Use the staging capture from Monday');
+  assert.equal(await dockTa.inputValue(), 'Use the staging capture from Monday', 'typing is not interrupted');
+  const hashBefore = await p.evaluate(() => location.hash);
+  await p.locator('#tray .dk-pill[data-name="trailmap"]').tap();
+  assert.equal(await p.evaluate(() => location.hash), hashBefore, 'picking a project does not leave the page');
+  assert.match(await p.locator('#tray .dk-pill[data-name="trailmap"]').getAttribute('class'), /\btarget\b/);
+  assert.equal(await dockTa.getAttribute('placeholder'), 'Message trailmap…');
+  assert.equal(await p.evaluate(() => { const t = document.getElementById('tray'); return t.scrollWidth > t.clientWidth + 1; }), false, 'the tray never spills over');
+  await dockTa.press('Enter');
+  await p.waitForFunction(() => document.getElementById('tray').hidden);
+  const sent = (await (await fetch(BASE + '/api/replies?all=1')).json()).replies.find((r) => r.prompt === 'Use the staging capture from Monday');
+  assert.equal(sent?.project, 'trailmap', 'sent to the project picked from the buzzer');
 }
 
 // a post that arrives while you are on the page is unread until it has been on screen for a moment

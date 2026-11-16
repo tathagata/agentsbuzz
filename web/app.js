@@ -39,8 +39,7 @@ const state = {
   quiet: localStorage.getItem('buzz.quiet') === '1',
   expanded: new Set(),
   composing: new Set(),
-  topOpen: false, // the one-line box at the top of the feed, opened
-  topProject: '', // the project you picked in it
+  dockTarget: '', // who the buzzer's text window sends to, once you pick a project
   drafts: new Map(),
   cursors: new Map(), // scope -> { oldest, done, loaded }
   loading: false,
@@ -665,7 +664,6 @@ function renderProject(name) {
 function notesSection(name) {
   const notes = projectNotes(name).sort((x, y) => y.id - x.id); // newest first, under the box you type in
   const ta = draftField('textarea', `note:${name}`, { placeholder: 'Tell the agents what to work on next', 'aria-label': 'Message for the agents on this project', rows: '2' });
-  const waiting = notes.some((r) => !r.delivered);
   return h(
     'section',
     { class: 'notes' },
@@ -685,14 +683,7 @@ function notesSection(name) {
         },
       },
       ta,
-      h('p', {
-        class: 'hint',
-        text: state.wake
-          ? 'An idle agent is woken with this; a busy one gets it at its next turn.'
-          : waiting
-            ? 'Waiting for an agent to start or finish a turn here. Run ./buzz wake on to wake idle ones.'
-            : 'Picked up by whichever agent starts or finishes a turn here next.',
-      }),
+      h('span', { class: 'spacer' }),
       h('button', { type: 'submit', text: 'Send' })
     ),
     notes.length ? h('div', { class: 'msgs' }, ...notes.slice(0, 6).map(messageLine)) : null
@@ -704,7 +695,6 @@ function renderFeed() {
   const list = threads(state.feedProject);
   return [
     state.feedProject ? scopeHeader(state.feedProject) : null,
-    topComposer(),
     needsLane(state.feedProject),
     list.length
       ? postList(state.feedProject, list)
@@ -774,15 +764,31 @@ function renderDock() {
   const active = all.filter(isActive).sort((a, b) => rank(b) - rank(a));
   const quiet = all.filter((p) => !isActive(p)).sort((a, b) => rank(b) - rank(a));
 
+  const typing = Boolean((state.drafts.get('dock') || '').trim());
+  const target = dockTargetFor(scope, by);
   const go = (hash) => {
     state.dockOpen = false;
     if (location.hash === hash || (hash === '#/' && (location.hash === '' || location.hash === '#/feed'))) renderDock();
     else location.hash = hash;
   };
-  const pill = (label, hash, { c, n, u, current, cls = '', live } = {}) =>
+  // While you are typing in the text window, tapping a project sends it there instead of opening it.
+  const pick = (name) => {
+    state.dockTarget = name;
+    renderDock();
+    document.querySelector('#tray [data-draft="dock"]')?.focus();
+  };
+  const pill = (label, hash, { c, n, u, current, cls = '', live, name } = {}) =>
     h(
       'button',
-      { class: `dk-pill ${cls}`, type: 'button', role: 'menuitem', 'aria-current': current ? 'true' : 'false', style: c ? `--c:${c}` : '', onclick: () => go(hash) },
+      {
+        class: `dk-pill ${cls}${typing && name ? ' pickable' : ''}${typing && name && name === target ? ' target' : ''}`,
+        type: 'button',
+        role: 'menuitem',
+        'aria-current': current ? 'true' : 'false',
+        'data-name': name || null,
+        style: c ? `--c:${c}` : '',
+        onclick: () => ((state.drafts.get('dock') || '').trim() && name ? pick(name) : go(hash)),
+      },
       c ? h('span', { class: `dot${live ? ' live' : ''}` }) : null,
       h('span', { class: 'lbl', text: label }),
       u ? h('span', { class: 'u', title: `${u} unread`, text: String(u) }) : null,
@@ -792,9 +798,10 @@ function renderDock() {
   const keep = tray.scrollTop;
   tray.replaceChildren(
     ...[
-    // nearest the thumb: everything, and the plans overview
+    // nearest the thumb: a quick text window, then everything and the plans overview
+    target ? dockCompose(target) : null,
     h('div', { class: 'dk-row' }, pill('All', '#/', { current: !scope && state.route.page === 'feed', n: totalNeeds, u: totalUnread, cls: 'all' }), pill('Plans', '#/projects', { current: state.route.page === 'home', cls: 'plans' })),
-    ...active.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], u: unreadBy[p.name], current: p.name === scope, live: p.last_ts && now - p.last_ts < LIVE_MS })),
+    ...active.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], u: unreadBy[p.name], current: p.name === scope, live: p.last_ts && now - p.last_ts < LIVE_MS, name: p.name })),
     quiet.length
       ? h('button', {
           class: 'dk-pill more',
@@ -808,10 +815,74 @@ function renderDock() {
           },
         })
       : null,
-    ...(state.showQuiet ? quiet.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], u: unreadBy[p.name], current: false, cls: 'quiet' })) : [])
+    ...(state.showQuiet ? quiet.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], u: unreadBy[p.name], current: false, cls: 'quiet', name: p.name })) : [])
   ].filter(Boolean)
   );
   tray.scrollTop = keep;
+}
+
+// Who the buzzer's text window sends to: the project you picked, else the one you are looking at,
+// else an agent that is waiting on you, else the project with the latest activity.
+function dockTargetFor(scope, needsBy) {
+  const has = (n) => n && state.projects.has(n);
+  if (has(state.dockTarget)) return state.dockTarget;
+  if (has(scope)) return scope;
+  const waiting = [...state.events.values()].filter((e) => e.needs_you && !e.resolved).sort((a, b) => b.id - a.id)[0];
+  if (waiting && needsBy[waiting.project]) return waiting.project;
+  return [...state.projects.values()].sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0))[0]?.name || '';
+}
+
+// The text window in the buzzer's tray. It answers the agent waiting on you in that project if there
+// is one, else leaves a note for the project's agents. Enter sends; Shift+Enter is a new line.
+function dockCompose(project) {
+  const need = [...state.events.values()].filter((e) => e.needs_you && !e.resolved && e.project === project && e.session_id).sort((a, b) => b.id - a.id)[0];
+  const ta = draftField('textarea', 'dock', { rows: '1', placeholder: need ? `Answer ${project}…` : `Message ${project}…`, 'aria-label': need ? `Answer ${project}: ${need.summary}` : `Message for the agents on ${project}` });
+  const fit = () => {
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
+  };
+  const send = async () => {
+    const prompt = ta.value.trim();
+    if (!prompt) return;
+    const path = need ? `/api/events/${need.id}/reply` : `/api/projects/${encodeURIComponent(project)}/reply`;
+    const row = await api(path, { method: 'POST', body: JSON.stringify({ prompt }) });
+    state.replies.set(row.id, row);
+    state.drafts.delete('dock');
+    state.dockTarget = '';
+    state.dockOpen = false;
+    toast(`Sent to ${project}`);
+    render();
+  };
+  ta.addEventListener('input', () => {
+    fit();
+    // once there is text, the project pills become "send to" choices (changed in place, so typing keeps going)
+    const typing = Boolean(ta.value.trim());
+    for (const el of document.querySelectorAll('#tray .dk-pill[data-name]')) {
+      el.classList.toggle('pickable', typing);
+      el.classList.toggle('target', typing && el.dataset.name === project);
+    }
+  });
+  ta.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault();
+      send();
+    }
+  });
+  requestAnimationFrame(fit);
+  return h(
+    'form',
+    {
+      class: 'dk-compose',
+      style: `--c:${color(project)}`,
+      onsubmit: (ev) => {
+        ev.preventDefault();
+        send();
+      },
+    },
+    avatar(project),
+    ta,
+    h('button', { type: 'submit', class: 'dk-send', 'aria-label': `Send to ${project}`, title: `Send to ${project}` }, icon('send'))
+  );
 }
 
 function dockIcon() {
@@ -1030,7 +1101,7 @@ function composer(head, key) {
     },
     ta,
     quickChips(ta, `reply:${key}`),
-    h('p', { class: 'hint', text: state.wake ? 'If the agent is idle, it is woken up to handle this.' : 'Delivered when the agent next starts or finishes a turn. To wake idle agents: ./buzz wake on' }),
+    h('span', { class: 'spacer' }),
     waiting ? h('button', { type: 'submit', value: 'handled', class: 'secondary', title: 'Send, and mark it handled', 'aria-label': 'Send, and mark it handled', text: '✓ Handled' }) : null,
     h('button', { type: 'submit', value: 'send', text: 'Send' })
   );
@@ -1045,6 +1116,7 @@ const ICONS = {
   explain: ['C12 12 9', 'M9.6 9.2a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5', 'M12 16.8h.01'],
   stop: ['C12 12 9', 'M9.5 9.5h5v5h-5z'],
   yes: ['M5 12.5l4.5 4.5L19 7'],
+  send: ['M12 19V5', 'M6 11l6-6 6 6'],
   no: ['M6.5 6.5l11 11', 'M17.5 6.5l-11 11'],
 };
 function icon(name) {
@@ -1174,90 +1246,6 @@ function moveToNextNeed() {
   next.classList.add('next');
   setTimeout(() => next.classList.remove('next'), 1600);
   toast(rows.length === 1 ? '1 more agent needs you' : `${rows.length} more agents need you`);
-}
-
-// ----- one line at the top of the feed: message an agent without finding its post -----
-// It goes to the agent waiting on you in that project if there is one, else to the project's agents.
-function topComposer() {
-  const scoped = state.feedProject;
-  const waiting = [...state.events.values()].filter((e) => e.needs_you && !e.resolved).sort((a, b) => b.id - a.id);
-  const names = [...state.projects.keys()].sort();
-  const fallback = scoped || waiting[0]?.project || threads('')[0]?.head.project || names[0] || '';
-  const project = scoped || (names.includes(state.topProject) ? state.topProject : fallback);
-  if (!project) return null;
-  const need = waiting.find((e) => e.project === project && e.session_id);
-  if (!state.topOpen) {
-    return h(
-      'button',
-      {
-        class: 'top-compose',
-        type: 'button',
-        onclick: () => {
-          state.topOpen = true;
-          render();
-          document.querySelector('#view [data-draft="top"]')?.focus();
-        },
-      },
-      avatar(project),
-      h('span', { class: 'tc-ph', text: need ? `Answer ${project}…` : `Message ${project}…` })
-    );
-  }
-  const ta = draftField('textarea', 'top', { placeholder: need ? `Answer: ${need.summary}` : `Tell the agents on ${project} what to do next`, 'aria-label': 'Message for an agent', rows: '2' });
-  const pick = scoped
-    ? h('span', { class: 'tc-name', text: project })
-    : h(
-        'select',
-        {
-          class: 'tc-proj',
-          'aria-label': 'Project',
-          onchange: (ev) => {
-            state.topProject = ev.target.value;
-            render();
-          },
-        },
-        ...names.map((n) => {
-          const o = h('option', { value: n, text: n });
-          o.selected = n === project;
-          return o;
-        })
-      );
-  return h(
-    'form',
-    {
-      class: 'composer top-compose open',
-      onsubmit: async (ev) => {
-        ev.preventDefault();
-        const prompt = ta.value.trim();
-        if (!prompt) return;
-        const path = need ? `/api/events/${need.id}/reply` : `/api/projects/${encodeURIComponent(project)}/reply`;
-        const row = await api(path, { method: 'POST', body: JSON.stringify({ prompt }) });
-        state.replies.set(row.id, row);
-        state.drafts.delete('top');
-        state.topOpen = false;
-        toast(`Sent to ${project}`);
-        render();
-      },
-    },
-    h(
-      'div',
-      { class: 'tc-row' },
-      avatar(project),
-      pick,
-      h('button', {
-        class: 'act',
-        type: 'button',
-        text: 'Cancel',
-        onclick: () => {
-          state.topOpen = false;
-          render();
-        },
-      })
-    ),
-    ta,
-    quickChips(ta, 'top'),
-    h('p', { class: 'hint', text: need ? 'Goes to the agent waiting on you here.' : state.wake ? 'An idle agent is woken with this.' : "Picked up at the agent's next turn." }),
-    h('button', { type: 'submit', text: 'Send' })
-  );
 }
 
 async function resolve(id, { advance = false } = {}) {
