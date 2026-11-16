@@ -1031,24 +1031,29 @@ function composer(head, key) {
     ta,
     quickChips(ta, `reply:${key}`),
     h('p', { class: 'hint', text: state.wake ? 'If the agent is idle, it is woken up to handle this.' : 'Delivered when the agent next starts or finishes a turn. To wake idle agents: ./buzz wake on' }),
-    waiting ? h('button', { type: 'submit', value: 'handled', class: 'secondary', text: 'Send & mark handled' }) : null,
+    waiting ? h('button', { type: 'submit', value: 'handled', class: 'secondary', title: 'Send, and mark it handled', 'aria-label': 'Send, and mark it handled', text: '✅ Handled' }) : null,
     h('button', { type: 'submit', value: 'send', text: 'Send' })
   );
 }
 
-// Things you often say, as chips under a text box: a tap adds one to what you are typing.
+// An emoji and at most one word, in a row of equal cells: it always fits, and never scrolls sideways.
+function emojiButton(emoji, word, props) {
+  return h('button', { class: 'ebtn', type: 'button', ...props }, h('span', { class: 'em', 'aria-hidden': 'true', text: emoji }), h('span', { class: 'wd', text: word }));
+}
+const buttonRow = (cls, label, buttons) => h('div', { class: cls, role: 'group', 'aria-label': label, style: `--n:${buttons.length}` }, ...buttons);
+
+// Things you often say, under a text box: a tap adds one to what you are typing.
 function quickChips(ta, draftKey) {
-  return h(
-    'div',
-    { class: 'quick', role: 'group', 'aria-label': 'Quick replies' },
-    ...QUICK_REPLIES.map((q) =>
-      h('button', {
-        class: 'chip',
-        type: 'button',
-        text: q,
+  return buttonRow(
+    'quick',
+    'Quick replies',
+    QUICK_REPLIES.map((q) =>
+      emojiButton(q.emoji, q.word, {
+        title: q.text,
+        'aria-label': q.text,
         onclick: () => {
           const now = ta.value.trim();
-          ta.value = `${now ? `${now}${/[.!?]$/.test(now) ? '' : '.'} ` : ''}${q}.`;
+          ta.value = `${now ? `${now}${/[.!?]$/.test(now) ? '' : '.'} ` : ''}${q.text}.`;
           state.drafts.set(draftKey, ta.value);
           ta.focus();
         },
@@ -1065,10 +1070,10 @@ const pendingAnswers = new Map(); // event id -> timer
 function answerChips(e) {
   if (!e || e.resolved) return null;
   const pending = pendingAnswers.has(e.id);
-  return h(
-    'div',
-    { class: 'answers', role: 'group', 'aria-label': 'Quick answers' },
-    ...suggestions(e.summary, e.body || '').map((s) => h('button', { class: 'chip', type: 'button', disabled: pending, title: s.reply, text: s.label, onclick: () => answer(e, s.reply) }))
+  return buttonRow(
+    'answers',
+    'Quick answers',
+    suggestions(e.summary, e.body || '').map((s) => emojiButton(s.emoji, s.word, { disabled: pending, title: s.reply, 'aria-label': `${s.word}: ${s.reply}`, onclick: () => answer(e, s.reply) }))
   );
 }
 function answer(e, reply) {

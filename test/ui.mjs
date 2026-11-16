@@ -324,8 +324,8 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   await p.evaluate(() => (location.hash = '#/'));
   await p.waitForFunction(() => [...document.querySelectorAll('#view .need')].some((e) => e.textContent.includes('next capture sample')));
   const need = p.locator('.need', { hasText: 'next capture sample' });
-  const go = need.locator('.answers .chip', { hasText: 'Go ahead' });
-  assert.equal(await go.count(), 1, 'a waiting item with no choices offers Go ahead');
+  const go = need.locator('.answers .ebtn', { hasText: 'Go' });
+  assert.equal(await go.count(), 1, 'a waiting item with no choices offers 👍 Go');
   const before = (await (await fetch(BASE + '/api/replies?all=1')).json()).replies.length;
   await go.tap();
   await p.waitForFunction(() => !document.getElementById('toast').hidden);
@@ -340,8 +340,12 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   assert.match(await top.textContent(), /^LL?.*Answer latency-lab…$/s);
   await top.tap();
   const form = p.locator('form.top-compose');
-  await form.locator('.quick .chip', { hasText: 'Run the tests' }).tap();
+  await form.locator('.quick .ebtn[aria-label="Run the tests"]').tap();
   assert.equal(await form.locator('textarea').inputValue(), 'Run the tests.');
+  // button rows never spill over or scroll sideways
+  const spill = await p.evaluate(() => [...document.querySelectorAll('.quick, .answers')].filter((r) => r.scrollWidth > r.clientWidth + 1).length);
+  assert.equal(spill, 0, 'every row of buttons fits its box');
+  assert.equal(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'no sideways scroll on the page');
   await form.locator('button.act', { hasText: 'Cancel' }).tap();
   assert.equal(await p.locator('form.top-compose').count(), 0, 'Cancel closes it');
 }
