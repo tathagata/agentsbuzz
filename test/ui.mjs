@@ -354,9 +354,14 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   const fresh = p.locator('.post', { hasText: 'Fresh unread milestone' });
   await fresh.waitFor();
   assert.match(await fresh.getAttribute('class'), /\bunread\b/, 'a new post starts unread');
+  // the buzzer counts it in blue, beside the amber needs-you count
+  const badge = Number(await p.locator('#dockBtn .dk-unread').textContent());
+  assert.ok(badge >= 1, 'the buzzer shows unread posts');
+  assert.match(await p.locator('#dockBtn').getAttribute('aria-label'), /\d+ unread/);
   await p.waitForFunction(() => /^\(\d+\) /.test(document.title), null, { timeout: 2000 }).catch(() => {});
   await p.waitForFunction(() => ![...document.querySelectorAll('.post')].find((e) => e.textContent.includes('Fresh unread milestone'))?.classList.contains('unread'), null, { timeout: 5000 });
-  assert.doesNotMatch(await p.title(), /^\(\d+\) /, 'nothing unread left in the title');
+  const after = await p.locator('#dockBtn .dk-unread').count() ? Number(await p.locator('#dockBtn .dk-unread').textContent()) : 0;
+  assert.equal(after, badge - 1, 'reading it takes it off the buzzer');
 }
 
 // your messages read like a messaging app: one tick when sent, two once the agent has it

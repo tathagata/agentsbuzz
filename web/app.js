@@ -489,8 +489,8 @@ function render() {
 
   restoreFocus(keep);
   anchorAfter(anchor);
-  const unread = watchUnread();
-  if (unread) document.title = `(${unread}) ${document.title}`;
+  watchUnread();
+  if (state.unreadTotal) document.title = `(${state.unreadTotal}) ${document.title}`;
   keys?.afterRender();
 }
 
@@ -745,14 +745,21 @@ function renderDock() {
   const scope = dockScope();
   const by = needsByProject();
   const totalNeeds = Object.values(by).reduce((a, b) => a + b, 0);
+  // the buzzer: amber = agents waiting on you, blue = posts you have not read yet
+  const unreadBy = {};
+  for (const t of threads('')) if (isUnread(t)) unreadBy[t.head.project] = (unreadBy[t.head.project] || 0) + 1;
+  const totalUnread = Object.values(unreadBy).reduce((a, b) => a + b, 0);
+  state.unreadTotal = totalUnread;
   const btn = $('dockBtn');
   btn.replaceChildren(
     ...[
       scope ? h('span', { class: 'dk-av', style: `--c:${color(scope)}`, text: monogram(scope) }) : dockIcon(),
       totalNeeds ? h('span', { class: 'dk-badge', text: String(totalNeeds) }) : null,
+      totalUnread ? h('span', { class: 'dk-unread', text: totalUnread > 99 ? '99+' : String(totalUnread) }) : null,
     ].filter(Boolean) // replaceChildren turns a null into the text "null"
   );
-  btn.setAttribute('aria-label', scope ? `Project: ${scope}. Switch project` : 'Switch project');
+  const counts_ = [totalNeeds && `${totalNeeds} need you`, totalUnread && `${totalUnread} unread`].filter(Boolean).join(', ');
+  btn.setAttribute('aria-label', `${scope ? `Project: ${scope}. ` : ''}Switch project${counts_ ? ` (${counts_})` : ''}`);
   btn.setAttribute('aria-expanded', String(state.dockOpen));
   dock.classList.toggle('open', state.dockOpen);
   $('scrim').hidden = !state.dockOpen;
@@ -772,21 +779,22 @@ function renderDock() {
     if (location.hash === hash || (hash === '#/' && (location.hash === '' || location.hash === '#/feed'))) renderDock();
     else location.hash = hash;
   };
-  const pill = (label, hash, { c, n, current, cls = '', live } = {}) =>
+  const pill = (label, hash, { c, n, u, current, cls = '', live } = {}) =>
     h(
       'button',
       { class: `dk-pill ${cls}`, type: 'button', role: 'menuitem', 'aria-current': current ? 'true' : 'false', style: c ? `--c:${c}` : '', onclick: () => go(hash) },
       c ? h('span', { class: `dot${live ? ' live' : ''}` }) : null,
       h('span', { class: 'lbl', text: label }),
-      n ? h('span', { class: 'n', text: String(n) }) : null
+      u ? h('span', { class: 'u', title: `${u} unread`, text: String(u) }) : null,
+      n ? h('span', { class: 'n', title: `${n} need you`, text: String(n) }) : null
     );
 
   const keep = tray.scrollTop;
   tray.replaceChildren(
     ...[
     // nearest the thumb: everything, and the plans overview
-    h('div', { class: 'dk-row' }, pill('All', '#/', { current: !scope && state.route.page === 'feed', n: totalNeeds, cls: 'all' }), pill('Plans', '#/projects', { current: state.route.page === 'home', cls: 'plans' })),
-    ...active.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], current: p.name === scope, live: p.last_ts && now - p.last_ts < LIVE_MS })),
+    h('div', { class: 'dk-row' }, pill('All', '#/', { current: !scope && state.route.page === 'feed', n: totalNeeds, u: totalUnread, cls: 'all' }), pill('Plans', '#/projects', { current: state.route.page === 'home', cls: 'plans' })),
+    ...active.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], u: unreadBy[p.name], current: p.name === scope, live: p.last_ts && now - p.last_ts < LIVE_MS })),
     quiet.length
       ? h('button', {
           class: 'dk-pill more',
@@ -800,7 +808,7 @@ function renderDock() {
           },
         })
       : null,
-    ...(state.showQuiet ? quiet.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], current: false, cls: 'quiet' })) : [])
+    ...(state.showQuiet ? quiet.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], u: unreadBy[p.name], current: false, cls: 'quiet' })) : [])
   ].filter(Boolean)
   );
   tray.scrollTop = keep;
