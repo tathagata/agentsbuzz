@@ -81,12 +81,19 @@ await sleep(500);
 
 // markdown is rendered, not shown raw
 assert.ok(await p.locator('.text strong:has-text("Rules compiler")').count(), 'bold in summary');
-assert.equal(await p.locator('.body.md strong').first().textContent(), 'rules compiler');
-assert.ok(!(await p.locator('.body').first().textContent()).includes('**'), 'no raw ** left');
-await p.click('.more-btn');
-assert.ok(await p.locator('.body.md table').count(), 'table rendered');
-assert.ok(await p.locator('.body.md ul li').count() >= 3, 'list rendered');
-assert.equal(await p.locator('.body.md script, .body.md img').count(), 0);
+// posts are quiet: the agent's full message is not in the feed, it opens in a sheet from the summary
+assert.equal(await p.locator('#view .body').count(), 0, 'no long messages inline');
+await p.locator('.post .text.has-body', { hasText: 'Rules compiler' }).first().click();
+await p.waitForSelector('.ps-sheet .body.md');
+assert.equal(await p.locator('.ps-sheet .body.md strong').first().textContent(), 'rules compiler');
+assert.ok(!(await p.locator('.ps-sheet .body').textContent()).includes('**'), 'no raw ** left');
+assert.ok(await p.locator('.ps-sheet .body.md table').count(), 'table rendered');
+assert.ok(await p.locator('.ps-sheet .body.md ul li').count() >= 3, 'list rendered');
+assert.equal(await p.locator('.ps-sheet .body.md script, .ps-sheet .body.md img').count(), 0);
+const codeWide = await p.evaluate(() => [...document.querySelectorAll('.code pre')].filter((e) => e.scrollWidth > e.clientWidth + 1).length);
+assert.equal(codeWide, 0, 'code in the full message wraps');
+await p.locator('.ps-close').click();
+assert.equal(await p.locator('#postSheet:not([hidden])').count(), 0, 'the sheet closes');
 
 // avatars: a two-letter monogram per project, the same everywhere, never shared by two projects
 {
@@ -108,34 +115,30 @@ const wide = await p.evaluate(() => [...document.querySelectorAll('.code pre')].
 assert.equal(wide, 0, 'code blocks wrap');
 assert.equal(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'no horizontal scroll');
 
-// threads read newest first: Reply box on top, then your messages, then the earlier updates
+// a post shows only counts; each opens its content in a sheet, newest first
 {
   const post = p.locator('.post', { hasText: 'Form validation fixed' });
-  // your messages are folded like the updates, behind a count
-  assert.equal(await post.locator('.msgs').count(), 0, 'replies start folded');
-  const repliesBtn = post.locator('button.act', { hasText: /^2 replies/ });
-  assert.equal(await repliesBtn.count(), 1, 'the fold says how many replies there are');
-  // neither has reached the agent: the folded button says so, in the waiting colour
-  assert.equal(await repliesBtn.textContent(), '2 replies · 2 waiting');
-  assert.match(await repliesBtn.getAttribute('class'), /\bwaiting\b/);
+  assert.equal(await post.locator('.msgs, .thread, .composer').count(), 0, 'nothing expands inside the post');
+  // your two messages, neither picked up yet: a count in the waiting colour
+  const repliesBtn = post.locator('.prow .ebtn[aria-label^="2 replies"]');
+  assert.equal(await repliesBtn.getAttribute('aria-label'), '2 replies · 2 waiting');
+  assert.match(await repliesBtn.getAttribute('class'), /\bamber\b/);
   await repliesBtn.tap();
-  const hideBtn = post.locator('button.act', { hasText: 'Hide replies' });
-  assert.doesNotMatch(await hideBtn.getAttribute('class'), /\bwaiting\b/, 'once open, the messages show their own state');
-  await post.locator('button.act', { hasText: /updates?$/ }).tap();
-  await post.locator('button.act', { hasText: /^Reply$/ }).tap();
-  await sleep(300);
-  const order = await post.evaluate((el) => [...el.querySelectorAll('.composer, .msgs, .thread')].map((x) => x.className.split(' ')[0]));
-  assert.deepEqual(order, ['composer', 'msgs', 'thread'], 'Reply box first, then messages, then updates');
-  assert.deepEqual(await post.locator('.msg-text').allTextContents(), ['second message', 'first message'], 'messages newest first');
-  const ups = await post.locator('.reply-line').evaluateAll((els) => els.map((e) => e.lastChild.textContent));
+  assert.deepEqual(await p.locator('.ps-sheet .msg-text').allTextContents(), ['second message', 'first message'], 'messages newest first');
+  await p.locator('.ps-close').tap();
+  await post.locator('.prow .ebtn[aria-label^="2 earlier"]').tap();
+  const ups = await p.locator('.ps-sheet .reply-line').evaluateAll((els) => els.map((e) => e.lastChild.textContent));
   assert.deepEqual(ups, ['Older update two', 'Older update one'], 'updates newest first');
-  await post.locator('button.act', { hasText: /^Reply$/ }).tap(); // close it again
-  await post.locator('button.act', { hasText: 'Hide replies' }).tap();
-  assert.equal(await post.locator('.msgs').count(), 0, 'Hide replies folds them again');
-  // a delivered reply folds to a plain count, without the waiting colour
-  const done = p.locator('.post', { hasText: 'Dock switcher works' }).locator('button.act', { hasText: /repl/ });
-  assert.equal(await done.textContent(), '1 reply');
-  assert.doesNotMatch(await done.getAttribute('class'), /\bwaiting\b/);
+  await p.locator('.ps-close').tap();
+  // the ⋯ menu has every action in one place
+  await post.locator('.pmore').tap();
+  const rows = await p.locator('.ps-sheet .ps-label').allTextContents();
+  for (const want of ['Reply', 'Your replies', 'Earlier updates']) assert.ok(rows.includes(want), `${want} in the menu: ${rows.join(', ')}`);
+  await p.locator('.ps-close').tap();
+  // a delivered reply: a plain count, without the waiting colour
+  const done = p.locator('.post', { hasText: 'Dock switcher works' }).locator('.prow .ebtn[aria-label^="1 reply"]');
+  assert.equal(await done.getAttribute('aria-label'), '1 reply');
+  assert.doesNotMatch(await done.getAttribute('class'), /\bamber\b/);
 }
 
 // the dock: opens, shows active projects first, switches the feed in place
@@ -190,17 +193,21 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   const at = titles.findIndex((t) => t === first);
   for (let i = at; i < target; i++) await kb.press('j');
   assert.match(await selText(), /Form validation fixed/);
-  const wasOpen = await p.locator('.post.sel .thread').count();
   await kb.press('Enter');
-  assert.equal(await p.locator('.post.sel .thread').count(), wasOpen ? 0 : 1, 'Enter shows or hides the updates');
-  if (wasOpen) await kb.press('o');
-  assert.equal(await p.locator('.post.sel .thread').count(), 1, 'o does the same');
+  assert.equal(await p.locator('.ps-sheet .thread').count(), 1, 'Enter shows the updates, in the sheet');
+  await kb.press('Enter');
+  assert.equal(await p.locator('#postSheet:not([hidden])').count(), 0, 'Enter again closes it');
+  await kb.press('o');
+  assert.equal(await p.locator('.ps-sheet .thread').count(), 1, 'o does the same');
+  await kb.press('Escape');
+  assert.equal(await p.locator('#postSheet:not([hidden])').count(), 0, 'Escape closes the sheet');
   await kb.press('r');
   assert.equal(await p.evaluate(() => document.activeElement.tagName), 'TEXTAREA', 'r opens the Reply box and puts the cursor in it');
   await kb.type('sent from the keyboard');
   await kb.press('Control+Enter');
-  await p.waitForFunction(() => [...document.querySelectorAll('.post.sel .msg-text')].some((e) => e.textContent === 'sent from the keyboard'));
-  assert.equal(await p.locator('.post.sel .composer').count(), 0, 'sending closes the Reply box');
+  await p.waitForFunction(() => document.getElementById('postSheet').hidden);
+  const sentKb = (await (await fetch(BASE + '/api/replies?all=1')).json()).replies.some((r) => r.prompt === 'sent from the keyboard');
+  assert.ok(sentKb, 'sending from the keyboard sends, and closes the Reply box');
 
   // ⌘K: type part of a name, Enter goes to that project's feed
   await kb.press('Control+k');
@@ -268,13 +275,13 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   // Enter on a focused button presses that button; it does not act on the selected post
   await kb.press('j');
   const selKey = await p.locator('.post.sel').getAttribute('data-k');
-  const other = p.locator('.post:not(.sel)', { has: p.locator('button.act', { hasText: /^Reply$/ }) }).first();
-  const otherKey = await other.getAttribute('data-k');
-  const selOpen = await p.locator('.post.sel .thread').count();
-  await other.locator('button.act', { hasText: /^Reply$/ }).focus();
+  const other = p.locator('.post:not(.sel)', { has: p.locator('.prow .ebtn', { hasText: /^Reply$/ }) }).first();
+  const otherProject = await other.locator('.proj-link').textContent();
+  await other.locator('.prow .ebtn', { hasText: /^Reply$/ }).focus();
   await kb.press('Enter');
-  await p.waitForFunction((k) => document.querySelector(`.post[data-k="${CSS.escape(k)}"] .composer`), otherKey);
-  assert.equal(await p.locator(`.post[data-k="${selKey}"] .thread`).count(), selOpen, 'the selected post was not toggled');
+  await p.waitForSelector('.ps-sheet .composer');
+  assert.match(await p.locator('.ps-sheet').getAttribute('aria-label'), new RegExp(`^${otherProject}: Reply$`), 'the focused post\'s Reply opened, not the selected one\'s');
+  assert.ok(selKey, 'a post was selected');
   await kb.press('Escape'); // leave the (empty) Reply box: it closes
   await sleep(150);
 
@@ -289,9 +296,8 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
     const post = p.locator('.post', { hasText: 'Plated the soup' });
     await post.waitFor();
     await kb.press('Escape'); // no selection: j picks the first post on screen
-    await post.evaluate((el) => el.scrollIntoView({ block: 'start' }));
-    await sleep(200);
-    await kb.press('j');
+    // walk down to it (quiet posts are short: the whole feed may fit on screen, so scrolling cannot pick it)
+    for (let i = 0; i < 40 && !/Plated the soup/.test((await p.locator('.post.sel .text').textContent().catch(() => '')) || ''); i++) await kb.press('j');
     assert.match(await selText(), /Plated the soup/);
     await kb.press('e');
     await sleep(400);
@@ -321,9 +327,12 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   await kb.press('r');
   await kb.type('jk');
   assert.equal(await selText(), sel, 'typing does not move the selection');
-  assert.equal(await p.locator('.post.sel textarea').inputValue(), 'jk');
+  assert.equal(await p.locator('.ps-sheet textarea').inputValue(), 'jk');
   await kb.press('Escape');
   assert.equal(await p.evaluate(() => document.activeElement.tagName), 'BODY', 'Esc leaves the Reply box');
+  assert.equal(await p.locator('#postSheet:not([hidden])').count(), 1, 'with text in it, the sheet stays, so nothing typed is lost');
+  await kb.press('Escape');
+  assert.equal(await p.locator('#postSheet:not([hidden])').count(), 0, 'a second Esc closes it');
 }
 
 // an agent waiting on you gets one-tap answers; a tap can be undone before anything is sent
@@ -346,13 +355,13 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
 
   // quick replies in a post's Reply box add to the text, and rows of buttons never spill over
   const replyPost = p.locator('.post', { hasText: 'next capture sample' });
-  await replyPost.locator('button.act', { hasText: /^Reply$/ }).tap();
-  await replyPost.locator('.quick .ebtn[aria-label="Run the tests"]').tap();
-  assert.equal(await replyPost.locator('.composer textarea').inputValue(), 'Run the tests.');
+  await replyPost.locator('.prow .ebtn', { hasText: /^Reply$/ }).tap();
+  await p.locator('.ps-sheet .quick .ebtn[aria-label="Run the tests"]').tap();
+  assert.equal(await p.locator('.ps-sheet .composer textarea').inputValue(), 'Run the tests.');
   const spill = await p.evaluate(() => [...document.querySelectorAll('.quick, .answers')].filter((r) => r.scrollWidth > r.clientWidth + 1).length);
   assert.equal(spill, 0, 'every row of buttons fits its box');
   assert.equal(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'no sideways scroll on the page');
-  await replyPost.locator('button.act', { hasText: /^Reply$/ }).tap();
+  await p.locator('.ps-close').tap();
   assert.equal(await p.locator('.top-compose').count(), 0, 'no separate box on top of the feed: the buzzer has the text window');
 
   // the buzzer opens a text window: it answers the agent waiting on you, and while you type the
@@ -408,10 +417,10 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
 // your messages read like a messaging app: one tick when sent, two once the agent has it
 {
   const post = p.locator('.post', { hasText: 'Form validation fixed' });
-  const btn = post.locator('button.act', { hasText: /repl/ });
-  if (/^\d/.test(await btn.textContent())) await btn.tap();
-  const states = await post.locator('.msg-state').allTextContents();
+  await post.locator('.prow .ebtn[aria-label*="repl"]').tap();
+  const states = await p.locator('.ps-sheet .msg-state').allTextContents();
   assert.ok(states.length && states.every((t) => /^✓ Sent · not read yet$|^✓✓ Read by the agent · /.test(t)), states.join(' | '));
+  await p.locator('.ps-close').tap();
 }
 
 assert.deepEqual(errs, []);

@@ -1232,29 +1232,6 @@ function renderSheet() {
   );
 }
 
-// The agent's longer message, as Markdown. Long ones are folded so the feed keeps moving; tap to unfold.
-function bodyBlock(head, key) {
-  const long = head.body.length > 360 || head.body.split('\n').length > 7;
-  const open = state.expanded.has(`${key}:body`);
-  return h(
-    'div',
-    { class: 'bodywrap' },
-    h('div', { class: `body md${long && !open ? ' clamp' : ''}` }, renderMarkdown(head.body)),
-    long
-      ? h('button', {
-          class: 'more-btn',
-          type: 'button',
-          'aria-expanded': String(open),
-          text: open ? 'Show less' : 'Show more',
-          onclick: () => {
-            open ? state.expanded.delete(`${key}:body`) : state.expanded.add(`${key}:body`);
-            render();
-          },
-        })
-      : null
-  );
-}
-
 function composer(head, key) {
   const ta = draftField('textarea', `reply:${key}`, { placeholder: 'Message for this agent', 'aria-label': 'Message for this agent', rows: '2' });
   const waiting = head.needs_you && !head.resolved;
