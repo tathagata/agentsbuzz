@@ -42,6 +42,7 @@ const state = {
   dockTarget: '', // who the buzzer's text window sends to, once you pick a project
   leftoff: new Map(), // project -> { data, at }: where you left off, from /api/projects/:name/summary
   keepDockOpen: false, // set while a project picked in the buzzer opens, so the tray stays up
+  sheet: null, // { kind, key }: a post's details open in the bottom sheet
   drafts: new Map(),
   cursors: new Map(), // scope -> { oldest, done, loaded }
   loading: false,
@@ -488,6 +489,7 @@ function render() {
   else if (page === 'feed') sync(view, renderFeed());
   else sync(view, renderProject(name));
   renderDock();
+  renderSheet();
 
   restoreFocus(keep);
   anchorAfter(anchor);
@@ -1081,63 +1083,30 @@ function repliesLabel(list) {
   return `${list.length} ${list.length === 1 ? 'reply' : 'replies'}${waiting ? ` · ${list.length === 1 ? '' : `${waiting} `}waiting` : ''}`;
 }
 
+// A post is quiet: who, what, when, and one light row of counts. Everything behind a count (the
+// answers, your replies, earlier updates, the reply box, the agent's full message) slides up in a sheet.
 function renderPost(t) {
   const { key, head, latest, rest } = t;
   const live = Date.now() - latest.ts < LIVE_MS;
-  const open = state.expanded.has(key);
   const replies = repliesFor(head);
-  const repliesOpen = state.expanded.has(`${key}:replies`);
   const url = safeUrl(head.url);
+  const waitingOn = (head.kind === 'blocked' || head.needs_you) && !head.resolved;
 
-  const text = h('p', { class: 'text' });
+  const text = h('p', { class: `text${head.body ? ' has-body' : ''}`, onclick: head.body ? (ev) => !ev.target.closest('a') && openSheet('body', key) : null });
   if (head.kind !== 'progress' && head.kind !== 'note') {
     text.append(h('span', { class: `tag ${head.kind}`, text: KIND_LABEL[head.kind] || head.kind }));
   }
   text.append(renderInline(head.summary));
   if (url) text.append(' ', h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Open' }));
 
-  const acts = h('div', { class: 'acts' });
-  if (rest.length) {
-    acts.append(
-      h('button', {
-        class: 'act',
-        type: 'button',
-        'aria-expanded': String(open),
-        text: open ? 'Hide updates' : `${rest.length} ${rest.length === 1 ? 'update' : 'updates'}`,
-        onclick: () => {
-          open ? state.expanded.delete(key) : state.expanded.add(key);
-          render();
-        },
-      })
-    );
-  }
-  if (replies.length) {
-    acts.append(
-      h('button', {
-        class: `act${!repliesOpen && replies.some((r) => !r.delivered) ? ' waiting' : ''}`,
-        type: 'button',
-        'aria-expanded': String(repliesOpen),
-        text: repliesOpen ? 'Hide replies' : repliesLabel(replies),
-        onclick: () => {
-          repliesOpen ? state.expanded.delete(`${key}:replies`) : state.expanded.add(`${key}:replies`);
-          render();
-        },
-      })
-    );
-  }
-  if (head.session_id) {
-    acts.append(
-      h('button', {
-        class: 'act',
-        type: 'button',
-        text: 'Reply',
-        onclick: () => {
-          state.composing.has(key) ? state.composing.delete(key) : state.composing.add(key);
-          render();
-        },
-      })
-    );
-  }
+  const counts = [
+    waitingOn ? emojiButton('explain', 'Answer', { class: 'ebtn amber', 'aria-label': 'Answer', onclick: () => openSheet('answers', key) }) : null,
+    replies.length
+      ? emojiButton('chat', String(replies.length), { class: `ebtn${replies.some((r) => !r.delivered) ? ' amber' : ''}`, 'aria-label': repliesLabel(replies), title: repliesLabel(replies), onclick: () => openSheet('replies', key) })
+      : null,
+    rest.length ? emojiButton('updates', String(rest.length), { 'aria-label': `${rest.length} earlier ${rest.length === 1 ? 'update' : 'updates'}`, onclick: () => openSheet('updates', key) }) : null,
+    head.session_id ? emojiButton('reply', 'Reply', { onclick: () => openSheet('reply', key) }) : null,
+  ].filter(Boolean);
 
   return h(
     'li',
@@ -1151,31 +1120,114 @@ function renderPost(t) {
         { class: 'head' },
         h('a', { class: 'proj-link', href: feedHref(head.project), text: head.project }),
         h('span', { class: 'meta', text: [...new Set([head.agent, head.harness].filter(Boolean))].join(' · ') }),
-        h('time', { datetime: new Date(head.ts).toISOString(), title: new Date(head.ts).toLocaleString(), text: ago(head.ts) })
+        h('time', { datetime: new Date(head.ts).toISOString(), title: new Date(head.ts).toLocaleString(), text: ago(head.ts) }),
+        h('button', { class: 'pmore', type: 'button', 'aria-label': 'More', title: 'More', onclick: () => openSheet('menu', key) }, icon('more'))
       ),
       text,
-      head.body ? bodyBlock(head, key) : null,
-      (head.kind === 'blocked' || head.needs_you) && !head.resolved ? answerChips(head) : null,
-      acts,
-      // Newest first, like the project notes: the box you type in, then your messages, then the
-      // earlier updates, so the latest of everything is right under your thumb.
-      state.composing.has(key) ? composer(head, key) : null,
-      replies.length && repliesOpen ? h('div', { class: 'msgs' }, ...[...replies].sort((x, y) => y.id - x.id).map(messageLine)) : null,
-      open
-        ? h(
-            'div',
-            { class: 'thread' },
-            rest.map((e) =>
-              h(
-                'div',
-                { class: 'reply-line' },
-                h('time', { text: ago(e.ts) }),
-                e.kind !== 'progress' && e.kind !== 'note' ? h('span', { class: `tag ${e.kind}`, text: KIND_LABEL[e.kind] }) : null,
-                renderInline(e.summary)
-              )
-            )
-          )
-        : null
+      counts.length ? h('div', { class: 'quick prow', role: 'group', 'aria-label': 'Post' }, ...counts) : null
+    )
+  );
+}
+
+// ----- the sheet a post's details slide up in -----
+function openSheet(kind, key) {
+  state.sheet = { kind, key };
+  state.dockOpen = false;
+  render();
+  if (kind === 'reply') document.querySelector('#postSheet textarea')?.focus();
+}
+function closeSheet() {
+  if (!state.sheet) return;
+  state.sheet = null;
+  render();
+}
+function sheetRow(iconName, label, { right = '', cls = '', onclick } = {}) {
+  return h('button', { class: `ps-row ${cls}`, type: 'button', onclick }, icon(iconName), h('span', { class: 'ps-label', text: label }), right ? h('span', { class: 'ps-right', text: right }) : null);
+}
+function renderSheet() {
+  const layer = $('postSheet');
+  const sh = state.sheet;
+  const t = sh && postIndex.get(sh.key);
+  if (!t) {
+    layer.hidden = true;
+    layer.replaceChildren();
+    return;
+  }
+  const { key, head, rest } = t;
+  const replies = repliesFor(head);
+  const waitingOn = (head.kind === 'blocked' || head.needs_you) && !head.resolved;
+  const go = (kind) => () => openSheet(kind, key);
+  const answerRows = () =>
+    suggestions(head.summary, head.body || '').map((s) =>
+      sheetRow(s.icon, s.word, {
+        // the full message it sends, unless that only repeats the word
+        right: s.reply.replace(/[.\s]+$/, '').toLowerCase() === s.word.toLowerCase() ? '' : s.reply,
+        cls: 'amber',
+        onclick: () => {
+          state.sheet = null;
+          answer(head, s.reply);
+        },
+      })
+    );
+  const handledRow = () =>
+    sheetRow('yes', 'Mark handled', {
+      onclick: () => {
+        state.sheet = null;
+        resolve(head.id, { advance: true });
+      },
+    });
+  let title = '';
+  let content;
+  if (sh.kind === 'answers') {
+    title = 'Answer';
+    content = [...answerRows(), sheetRow('reply', 'Write an answer', { onclick: go('reply') }), handledRow()];
+  } else if (sh.kind === 'replies') {
+    title = repliesLabel(replies);
+    content = [h('div', { class: 'msgs' }, ...[...replies].sort((x, y) => y.id - x.id).map(messageLine)), sheetRow('reply', 'Reply', { onclick: go('reply') })];
+  } else if (sh.kind === 'updates') {
+    title = `${rest.length} earlier ${rest.length === 1 ? 'update' : 'updates'}`;
+    content = [
+      h(
+        'div',
+        { class: 'thread' },
+        rest.map((e) =>
+          h('div', { class: 'reply-line' }, h('time', { text: ago(e.ts) }), e.kind !== 'progress' && e.kind !== 'note' ? h('span', { class: `tag ${e.kind}`, text: KIND_LABEL[e.kind] }) : null, renderInline(e.summary))
+        )
+      ),
+    ];
+  } else if (sh.kind === 'body') {
+    title = 'Full message';
+    content = [h('div', { class: 'body md' }, renderMarkdown(head.body || ''))];
+  } else if (sh.kind === 'reply') {
+    title = 'Reply';
+    content = [composer(head, key)];
+  } else {
+    title = 'More';
+    content = [
+      ...(waitingOn ? answerRows() : []),
+      head.session_id ? sheetRow('reply', 'Reply', { onclick: go('reply') }) : null,
+      replies.length ? sheetRow('chat', 'Your replies', { right: repliesLabel(replies), onclick: go('replies') }) : null,
+      rest.length ? sheetRow('updates', 'Earlier updates', { right: String(rest.length), onclick: go('updates') }) : null,
+      head.body ? sheetRow('doc', 'Full message', { onclick: go('body') }) : null,
+      waitingOn ? handledRow() : null,
+      sheetRow('open', `Open ${head.project}`, {
+        onclick: () => {
+          state.sheet = null;
+          location.hash = feedHref(head.project);
+        },
+      }),
+    ].filter(Boolean);
+  }
+  layer.hidden = false;
+  layer.replaceChildren(
+    h('div', { class: 'ps-dim', onclick: closeSheet }),
+    h(
+      'div',
+      { class: 'ps-sheet', role: 'dialog', 'aria-label': `${head.project}: ${title}` },
+      h('div', { class: 'ps-grab' }),
+      h('div', { class: 'ps-head' }, h('b', { text: title }), h('span', { class: 'ps-sub', text: ` · ${head.project}` }), h('button', { class: 'ps-close', type: 'button', 'aria-label': 'Close', onclick: closeSheet }, icon('no'))),
+      h('p', { class: 'ps-about', text: head.summary }),
+      ...content
     )
   );
 }
@@ -1218,7 +1270,8 @@ function composer(head, key) {
         state.replies.set(row.id, row);
         state.drafts.delete(`reply:${key}`);
         state.composing.delete(key);
-        state.expanded.add(`${key}:replies`); // show what you just sent
+        state.sheet = null;
+        toast(`Sent to ${head.project}`);
         if (ev.submitter?.value === 'handled') await resolve(head.id, { advance: true });
         else render();
       },
@@ -1241,6 +1294,12 @@ const ICONS = {
   stop: ['C12 12 9', 'M9.5 9.5h5v5h-5z'],
   yes: ['M5 12.5l4.5 4.5L19 7'],
   right: ['M10 6l6 6-6 6'],
+  chat: ['M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-8.5l-4.5 3.5v-3.5h-1A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5z'],
+  updates: ['M4.5 12a7.5 7.5 0 1 0 2.2-5.3', 'M4.5 4.5v3.7h3.7'],
+  reply: ['M10 7.5L5 12l5 4.5', 'M5.5 12H14a5 5 0 0 1 5 5v1'],
+  more: ['C5.5 12 1.2', 'C12 12 1.2', 'C18.5 12 1.2'],
+  doc: ['M7 3.5h7l4 4V20.5H7z', 'M13.5 3.5V8H18', 'M9.5 12.5h5', 'M9.5 16h5'],
+  open: ['M14 4.5h5.5V10', 'M19.5 4.5l-8 8', 'M18 14v5.5H4.5V6H10'],
   down: ['M6 10l6 6 6-6'],
   send: ['M12 19V5', 'M6 11l6-6 6 6'],
   no: ['M6.5 6.5l11 11', 'M17.5 6.5l-11 11'],
@@ -1498,18 +1557,17 @@ keys = installShortcuts({
     if (location.hash !== hash) location.hash = hash;
   },
   toggleExpand(key) {
-    state.expanded.has(key) ? state.expanded.delete(key) : state.expanded.add(key);
-    render();
+    if (state.sheet?.key === key) return closeSheet();
+    const t = postIndex.get(key);
+    openSheet(t?.rest.length ? 'updates' : 'menu', key);
   },
   reply(key) {
-    state.composing.add(key);
-    render();
-    postSel(key)?.querySelector('.composer textarea')?.focus();
+    openSheet('reply', key);
   },
-  closeComposer(textarea) {
-    const key = textarea.closest('.post')?.dataset.k;
-    if (key && state.composing.delete(key)) render();
+  closeComposer() {
+    closeSheet();
   },
+  sheetOpen: () => Boolean(state.sheet),
   resolve(key) {
     const id = this.postInfo(key)?.needId;
     if (id) resolve(id, { advance: true });

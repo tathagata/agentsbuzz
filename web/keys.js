@@ -241,7 +241,8 @@ export function installShortcuts(app) {
       q: () => app.toggleQuiet(),
       '?': () => openHelp(),
       Escape: () => {
-        if (app.dockOpen()) app.toggleDock(false);
+        if (app.sheetOpen?.()) app.closeComposer();
+        else if (app.dockOpen()) app.toggleDock(false);
         else if (sel) select('');
         else app.back();
       },

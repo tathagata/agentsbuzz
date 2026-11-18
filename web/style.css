@@ -712,3 +712,38 @@ dialog.khelp { padding: 18px calc(var(--pad) + 4px); max-height: 85vh; overflow-
 .lo-tile b { font-size: 1.1rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 .lo-tile span { font-size: 0.72rem; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lo-period { margin: 4px 0 0; text-align: right; color: var(--muted); font-size: 0.72rem; }
+
+/* ---------- quiet posts: one row of counts; details in a bottom sheet ---------- */
+.prow { margin-top: 6px; gap: 16px; }
+.ebtn.amber, .ebtn.amber svg { color: var(--alert); }
+.ebtn.amber { font-weight: 600; }
+.head .pmore { flex: none; margin-left: 6px; padding: 0 0 0 2px; background: none; border: 0; color: var(--muted); display: grid; place-items: center; }
+.pmore svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
+.text.has-body { cursor: pointer; }
+.ps-layer { position: fixed; inset: 0; z-index: 30; }
+.ps-layer[hidden] { display: none; }
+.ps-dim { position: absolute; inset: 0; background: rgba(5, 10, 18, 0.5); animation: fade 0.15s ease-out; }
+.ps-sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; max-height: 80vh; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--surface); border-top: 1px solid var(--line); border-radius: 18px 18px 0 0;
+  padding: 8px max(16px, calc((100vw - 640px) / 2)) calc(16px + env(safe-area-inset-bottom));
+  animation: sheetup 0.16s ease-out;
+}
+.ps-grab { width: 38px; height: 4px; border-radius: 2px; background: #3a4a60; margin: 0 auto 10px; }
+.ps-head { display: flex; align-items: center; gap: 2px; }
+.ps-head b { font-weight: 800; }
+.ps-sub { color: var(--muted); font-size: 0.9rem; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-close { flex: none; background: none; border: 0; color: var(--muted); padding: 4px; display: grid; }
+.ps-close svg, .ps-row svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.ps-row svg .num { fill: currentColor; stroke: none; font-size: 11.5px; font-weight: 800; }
+.ps-about { margin: 4px 0 8px; color: var(--muted); font-size: 0.9rem; line-height: 1.35; overflow-wrap: anywhere; }
+.ps-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 10px 2px;
+  background: none; border: 0; border-top: 1px solid var(--line); color: var(--text); font: inherit; text-align: left;
+}
+.ps-row svg { flex: none; color: var(--muted); }
+.ps-row.amber, .ps-row.amber svg { color: var(--alert); font-weight: 600; }
+.ps-label { flex: none; }
+.ps-right { margin-left: auto; min-width: 0; color: var(--muted); font-size: 0.85rem; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-sheet .msgs, .ps-sheet .thread, .ps-sheet .body, .ps-sheet .composer { margin-top: 6px; }
+@media (prefers-reduced-motion: reduce) { .ps-sheet, .ps-dim { animation: none; } }
