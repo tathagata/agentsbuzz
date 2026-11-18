@@ -36,8 +36,9 @@ Then put it on your phone:
 You start an agent in one repo, another in a second, and a third in a terminal you forgot about. Then you walk away.
 
 - **Know what got done without opening a laptop.** Every finished turn and commit, from every project, newest first, readable on a phone.
-- **Never leave an agent stuck.** Anything waiting for your answer is pinned to the top. Tap **Handled** when it is.
-- **Answer from wherever you are.** Tap **Reply** on a post and the agent gets your message. With `./buzz wake on`, an agent that has stopped is resumed with it right away.
+- **Never leave an agent stuck.** Anything waiting for your answer is pinned to the top, with one-tap answers read from its own question (*① Grams ② Cups*, *✓ Yes ✕ No*). Answer, and the next agent waiting on you comes into view.
+- **Answer from wherever you are.** Tap **Reply** on a post, or type into the buzzer, and the agent gets your message. Ticks show when it has read it. With `./buzz wake on`, an agent that has stopped is resumed with it right away.
+- **Pick up where you left off.** Each project shows its agent's last word, the one next action (one tap to go ahead) and what got done in the last 30 days.
 
 Everything runs on your computer. Nothing leaves it unless you choose to reach it from your phone (privately, over [Tailscale](https://tailscale.com)).
 
@@ -66,7 +67,7 @@ Everything runs on your computer. Nothing leaves it unless you choose to reach i
 
 Your data lives in `~/.agentsbuzz`, readable only by you.
 
-**On your phone:** tap the round button at the bottom right to switch project, **Plans** to see every project's progress, and **Reply** on any post to message its agent. Add it to your home screen to use it like an app.
+**On your phone:** the round button at the bottom right (the buzzer) shows who needs you (amber) and what you have not read (blue). Tap it to switch project or to write to any agent: pick the project, type, send. Posts stay short; tap a count, the summary or **⋯** to see answers, replies, earlier updates or the agent's full message in a sheet. Add it to your home screen to use it like an app.
 
 **On a laptop:** press `?` for keyboard shortcuts. `j`/`k` move, `⌘K` jumps to any project, `r` replies, `e` marks something handled.
 
@@ -166,6 +167,7 @@ node cli/seed.js      # sample projects, to look around
 | `GET /api/events` | Newest first. Filters: `project`, `kind`, `session_id`, `needs=1`, `since`, `limit`; page with `before_ts` and `before` |
 | `GET /api/stream` | Live updates (server-sent events) |
 | `GET /api/projects`, `GET`/`PUT /api/projects/:name` | Projects with stage, focus, plan and counts |
+| `GET /api/projects/:name/summary` | Where you left off: the agent's last word, the next action, 30-day numbers (read only) |
 | `POST /api/events/:id/resolve` | Mark a needs-you item handled |
 | `POST /api/events/:id/reply`, `POST /api/projects/:name/reply` | Leave a message for a session, or for the next agent on a project |
 | `POST /api/replies/claim` | An agent collects its messages (each is handed out once) |

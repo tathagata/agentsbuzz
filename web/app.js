@@ -2,6 +2,7 @@
 import { renderMarkdown, renderInline } from '/md.js';
 import { assignMonograms, colorFor } from '/avatar.js';
 import { installShortcuts } from '/keys.js';
+import { suggestions, QUICK_REPLIES } from '/suggest.js';
 
 const $ = (id) => document.getElementById(id);
 const IMPORTANT = new Set(['milestone', 'done', 'pr', 'blocked', 'error']);
@@ -38,6 +39,10 @@ const state = {
   quiet: localStorage.getItem('buzz.quiet') === '1',
   expanded: new Set(),
   composing: new Set(),
+  dockTarget: '', // who the buzzer's text window sends to, once you pick a project
+  leftoff: new Map(), // project -> { data, at }: where you left off, from /api/projects/:name/summary
+  keepDockOpen: false, // set while a project picked in the buzzer opens, so the tray stays up
+  sheet: null, // { kind, key }: a post's details open in the bottom sheet
   drafts: new Map(),
   cursors: new Map(), // scope -> { oldest, done, loaded }
   loading: false,
@@ -127,7 +132,7 @@ function nowLine(p) {
   if (doing) return `Now: ${doing.title}`;
   const next = p.plan.find((s) => s.status === 'todo');
   if (next) return `Next: ${next.title}`;
-  return p.plan.length ? 'Plan complete' : 'No plan yet';
+  return p.plan.length ? 'Plan complete' : ''; // no plan: say nothing; "where you left off" covers it
 }
 
 function quietFor(p) {
@@ -252,7 +257,8 @@ async function onRoute() {
   state.navDepth += 1;
   state.route = parseRoute();
   state.feedProject = state.route.page === 'feed' ? state.route.name : '';
-  state.dockOpen = false;
+  state.dockOpen = state.keepDockOpen; // picking a project in the buzzer keeps its text window up
+  state.keepDockOpen = false;
   const target = state.route.page === 'project' ? 0 : state.pos.get(location.hash || '#/') || 0;
   render();
   window.scrollTo(0, target);
@@ -330,6 +336,68 @@ function postList(scope, list) {
 
 let keys = null; // keyboard shortcuts, installed once the app's actions exist (see the end of this file)
 const postIndex = new Map(); // key -> thread, so a keyboard shortcut knows what the selected post is
+// ----- read and unread -----
+// Which posts you have seen, kept on this device only (like a remembered filter). Everything from
+// before your first visit counts as read. A post becomes read once it has been on screen for a second.
+const READ_KEY = 'buzz.read';
+const readState = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(READ_KEY) || 'null');
+    if (v && typeof v.base === 'number' && v.ids && typeof v.ids === 'object') return v;
+  } catch {
+    /* private mode or cleared: start fresh */
+  }
+  return { base: Date.now(), ids: {}, fresh: true };
+})();
+function saveRead() {
+  try {
+    const keys = Object.keys(readState.ids);
+    for (const k of keys.slice(0, Math.max(0, keys.length - 800))) delete readState.ids[k];
+    localStorage.setItem(READ_KEY, JSON.stringify(readState));
+  } catch {
+    /* not saved: it is only a convenience */
+  }
+}
+if (readState.fresh) {
+  delete readState.fresh;
+  saveRead(); // remember the first visit, so posts that arrive after it count as new next time
+}
+const isUnread = (t) => t.latest.ts > readState.base && (readState.ids[t.key] || 0) < t.latest.id;
+function markRead(key) {
+  const t = postIndex.get(key);
+  if (!t || !isUnread(t)) return;
+  readState.ids[key] = t.latest.id;
+  saveRead();
+  requestRender();
+}
+const readTimers = new Map();
+const readObserver = new IntersectionObserver(
+  (entries) => {
+    for (const e of entries) {
+      const key = e.target.dataset.k;
+      if (e.isIntersecting && e.intersectionRatio >= 0.6) {
+        if (!readTimers.has(key)) readTimers.set(key, setTimeout(() => (readTimers.delete(key), !document.hidden && markRead(key)), 1000));
+      } else {
+        clearTimeout(readTimers.get(key));
+        readTimers.delete(key);
+      }
+    }
+  },
+  { threshold: [0, 0.6] }
+);
+const watchedForRead = new WeakSet();
+function watchUnread() {
+  let n = 0;
+  for (const el of document.querySelectorAll('#view .post.unread')) {
+    n++;
+    if (!watchedForRead.has(el)) {
+      watchedForRead.add(el);
+      readObserver.observe(el);
+    }
+  }
+  return n;
+}
+
 function postNode(t) {
   const { key, head, latest, rest } = t;
   postIndex.set(key, t);
@@ -337,7 +405,7 @@ function postNode(t) {
   const sig = [
     head.id, head.kind, head.summary, head.body || '', head.url || '', head.resolved ? 1 : 0, head.needs_you ? 1 : 0,
     latest.id, rest.map((e) => e.id).join(','), open ? rest.map((e) => ago(e.ts)).join(',') : '',
-    open ? 1 : 0, state.expanded.has(`${key}:body`) ? 1 : 0, state.expanded.has(`${key}:replies`) ? 1 : 0, state.composing.has(key) ? 1 : 0, replySig(repliesFor(head)), Date.now() - latest.ts < LIVE_MS ? 1 : 0, ago(head.ts),
+    open ? 1 : 0, pendingAnswers.has(head.id) ? 1 : 0, state.expanded.has(`${key}:body`) ? 1 : 0, state.expanded.has(`${key}:replies`) ? 1 : 0, state.composing.has(key) ? 1 : 0, replySig(repliesFor(head)), Date.now() - latest.ts < LIVE_MS ? 1 : 0, ago(head.ts), isUnread(t) ? 1 : 0,
   ].join('\u241f');
   return cached(key, sig, () => {
     const li = renderPost(t);
@@ -421,9 +489,12 @@ function render() {
   else if (page === 'feed') sync(view, renderFeed());
   else sync(view, renderProject(name));
   renderDock();
+  renderSheet();
 
   restoreFocus(keep);
   anchorAfter(anchor);
+  watchUnread();
+  if (state.unreadTotal) document.title = `(${state.unreadTotal}) ${document.title}`;
   keys?.afterRender();
 }
 
@@ -504,7 +575,7 @@ function projectRow(p) {
           p.needs ? h('span', { class: 'badge', text: `${p.needs} needs you` }) : null,
           h('span', { class: 'ptime', text: last })
         ),
-        h('div', { class: 'pnow', text: nowLine(p) }),
+        nowLine(p) ? h('div', { class: 'pnow', text: nowLine(p) }) : null,
         c.total ? h('div', { class: 'pprog' }, progressBar(p.plan), h('span', { text: `${c.done} of ${c.total}` })) : null,
         quiet
           ? h('div', { class: 'pquiet', text: `Quiet for ${quiet} days` })
@@ -536,7 +607,7 @@ function renderProject(name) {
       { class: 'hero-body' },
       h('div', { class: 'hero-line' }, h('span', { class: `pill ${p.status}`, text: STATUS_LABEL[p.status] }), quiet ? h('span', { class: 'pquiet', text: `Quiet for ${quiet} days` }) : null),
       p.description ? h('p', { class: 'desc', text: p.description }) : h('p', { class: 'desc muted', text: 'No description yet. Tap Edit to add one.' }),
-      h('p', { class: 'pnow', text: nowLine(p) })
+      nowLine(p) ? h('p', { class: 'pnow', text: nowLine(p) }) : null
     )
   );
 
@@ -592,13 +663,13 @@ function renderProject(name) {
       : h('p', { class: 'empty', text: cursor(name).loaded ? 'No updates yet. Agents working on this project will post here.' : 'Loading' })
   );
 
-  return [hero, needsLane(name), plan, notesSection(name), feed].filter(Boolean);
+  // the hand-kept plan only shows if a project has one; "where you left off" keeps itself up to date
+  return [hero, leftOffCard(name, { full: true }), needsLane(name), c.total ? plan : null, notesSection(name), feed].filter(Boolean);
 }
 
 function notesSection(name) {
   const notes = projectNotes(name).sort((x, y) => y.id - x.id); // newest first, under the box you type in
   const ta = draftField('textarea', `note:${name}`, { placeholder: 'Tell the agents what to work on next', 'aria-label': 'Message for the agents on this project', rows: '2' });
-  const waiting = notes.some((r) => !r.delivered);
   return h(
     'section',
     { class: 'notes' },
@@ -618,14 +689,7 @@ function notesSection(name) {
         },
       },
       ta,
-      h('p', {
-        class: 'hint',
-        text: state.wake
-          ? 'An idle agent is woken with this; a busy one gets it at its next turn.'
-          : waiting
-            ? 'Waiting for an agent to start or finish a turn here. Run ./buzz wake on to wake idle ones.'
-            : 'Picked up by whichever agent starts or finishes a turn here next.',
-      }),
+      h('span', { class: 'spacer' }),
       h('button', { type: 'submit', text: 'Send' })
     ),
     notes.length ? h('div', { class: 'msgs' }, ...notes.slice(0, 6).map(messageLine)) : null
@@ -637,6 +701,7 @@ function renderFeed() {
   const list = threads(state.feedProject);
   return [
     state.feedProject ? scopeHeader(state.feedProject) : null,
+    state.feedProject ? leftOffCard(state.feedProject) : null,
     needsLane(state.feedProject),
     list.length
       ? postList(state.feedProject, list)
@@ -659,7 +724,109 @@ function scopeHeader(name) {
       p ? h('div', { class: 'scope-sub', text: [STATUS_LABEL[p.status], nowLine(p)].filter(Boolean).join(' · ') }) : null,
       c.total ? h('div', { class: 'pprog' }, progressBar(p.plan), h('span', { text: `${c.done} of ${c.total}` })) : null
     ),
-    h('a', { class: 'scope-plan', href: projectHref(name), text: 'Plan' })
+    h('a', { class: 'scope-plan', href: projectHref(name), text: 'Project' })
+  );
+}
+
+// ----- where you left off -----
+// For coming back to a project after a while: the agent's last word, what to do next (one tap),
+// and what got done in the last 30 days. Worked out by the server from the feed it already has.
+const agoText = (ts) => (ago(ts) === 'now' ? 'just now' : `${ago(ts)} ago`);
+function leftOffFor(name) {
+  const have = state.leftoff.get(name);
+  if (!have || (Date.now() - have.at > 60000 && !have.loading)) {
+    state.leftoff.set(name, { ...(have || {}), at: Date.now(), loading: true });
+    api(`/api/projects/${encodeURIComponent(name)}/summary`)
+      .then((data) => {
+        state.leftoff.set(name, { data, at: Date.now() });
+        requestRender();
+      })
+      .catch(() => state.leftoff.set(name, { ...(state.leftoff.get(name) || {}), loading: false }));
+  }
+  return have?.data || null;
+}
+
+async function sendNext(name, n) {
+  const path = n.event_id && !n.project_note ? `/api/events/${n.event_id}/reply` : `/api/projects/${encodeURIComponent(name)}/reply`;
+  const row = await api(path, { method: 'POST', body: JSON.stringify({ prompt: n.reply }) });
+  state.replies.set(row.id, row);
+  state.leftoff.delete(name);
+  toast(`Sent to ${name}`);
+  render();
+}
+
+// The buttons for the next action: one-tap answers for a question, else one button.
+function nextActions(name, n) {
+  if (n.kind === 'answer' || n.kind === 'question') {
+    return answerChips({ id: n.event_id, project: name, summary: n.text, body: n.body || '', session_id: n.project_note ? '' : 'yes', needs_you: n.kind === 'answer' ? 1 : 0, resolved: 0 });
+  }
+  if (!n.reply) return null;
+  const word = { fix: 'Fix', proposal: 'Go', continue: 'Continue' }[n.kind] || 'Go';
+  return buttonRow('answers', 'Next action', [emojiButton('go', word, { title: n.reply, 'aria-label': n.reply, onclick: () => sendNext(name, n) })]);
+}
+
+function metricTiles(m) {
+  const tiles = [
+    [m.commits, m.commits === 1 ? 'Commit' : 'Commits'],
+    [m.turns, 'Done'],
+    [m.milestones + m.prs, 'Shipped'],
+    [m.active_days, m.active_days === 1 ? 'Day' : 'Days'],
+  ];
+  if (tiles.every(([v]) => !v)) return null;
+  return h(
+    'div',
+    { class: 'lo-metrics' },
+    h('div', { class: 'lo-tiles', role: 'list', 'aria-label': `Last ${m.days} days` }, ...tiles.map(([v, w]) => h('div', { class: 'lo-tile', role: 'listitem' }, h('b', { text: String(v) }), h('span', { text: w })))),
+    h('p', { class: 'lo-period', text: `Last ${m.days} days` })
+  );
+}
+
+// Folded by default to one slim line under the project header: the next action and how long ago.
+// Tap the line to unfold the agent's last word, the last commit, the answers and the 30-day numbers.
+function leftOffCard(name, { full = false } = {}) {
+  const lo = leftOffFor(name);
+  if (!lo) return null;
+  const { summary: s, next: n, metrics: m } = lo;
+  if (!s.last_ts) return null;
+  const key = `lo:${name}`;
+  const open = state.expanded.has(key);
+  const LABEL = { answer: 'Answer', question: 'Answer', fix: 'Fix', proposal: 'Next', continue: 'Continue', waiting: 'Waiting', start: 'Start' };
+  const quick = !open && n.reply ? emojiButton('go', { fix: 'Fix', proposal: 'Go', continue: 'Continue' }[n.kind] || 'Go', { class: 'ebtn lo-go', title: n.reply, 'aria-label': n.reply, onclick: () => sendNext(name, n) }) : null;
+  const row = h(
+    'div',
+    { class: 'lo-row' },
+    h(
+      'button',
+      {
+        class: 'lo-toggle',
+        type: 'button',
+        'aria-expanded': String(open),
+        'aria-label': `Where you left off: ${LABEL[n.kind] || 'Next'}: ${n.text}`,
+        onclick: () => {
+          open ? state.expanded.delete(key) : state.expanded.add(key);
+          render();
+        },
+      },
+      icon(open ? 'down' : 'right'),
+      h('span', { class: `lo-label ${n.kind}`, text: LABEL[n.kind] || 'Next' }),
+      h('span', { class: 'lo-line', text: n.kind === 'waiting' ? `Your message is waiting: “${n.text}”` : n.text }),
+      h('span', { class: 'lo-when', text: ago(s.last_ts) })
+    ),
+    quick
+  );
+  if (!open) return h('section', { class: 'leftoff', style: `--c:${color(name)}` }, row);
+  return h(
+    'section',
+    { class: 'leftoff open', style: `--c:${color(name)}` },
+    row,
+    h(
+      'div',
+      { class: 'lo-body' },
+      s.agent ? h('p', { class: 'lo-said' }, h('b', { text: `${s.agent.name}, ${agoText(s.agent.ts)}: ` }), s.agent.text) : null,
+      s.commit ? h('p', { class: 'lo-commit', text: `Last commit ${agoText(s.commit.ts)}: ${s.commit.text}` }) : null,
+      nextActions(name, n),
+      full ? metricTiles(m) : null
+    )
   );
 }
 
@@ -677,20 +844,32 @@ function renderDock() {
   const scope = dockScope();
   const by = needsByProject();
   const totalNeeds = Object.values(by).reduce((a, b) => a + b, 0);
+  // the buzzer: amber = agents waiting on you, blue = posts you have not read yet
+  const unreadBy = {};
+  for (const t of threads('')) if (isUnread(t)) unreadBy[t.head.project] = (unreadBy[t.head.project] || 0) + 1;
+  const totalUnread = Object.values(unreadBy).reduce((a, b) => a + b, 0);
+  state.unreadTotal = totalUnread;
   const btn = $('dockBtn');
   btn.replaceChildren(
     ...[
       scope ? h('span', { class: 'dk-av', style: `--c:${color(scope)}`, text: monogram(scope) }) : dockIcon(),
       totalNeeds ? h('span', { class: 'dk-badge', text: String(totalNeeds) }) : null,
+      totalUnread ? h('span', { class: 'dk-unread', text: totalUnread > 99 ? '99+' : String(totalUnread) }) : null,
     ].filter(Boolean) // replaceChildren turns a null into the text "null"
   );
-  btn.setAttribute('aria-label', scope ? `Project: ${scope}. Switch project` : 'Switch project');
+  const counts_ = [totalNeeds && `${totalNeeds} need you`, totalUnread && `${totalUnread} unread`].filter(Boolean).join(', ');
+  btn.setAttribute('aria-label', `${scope ? `Project: ${scope}. ` : ''}Switch project${counts_ ? ` (${counts_})` : ''}`);
   btn.setAttribute('aria-expanded', String(state.dockOpen));
   dock.classList.toggle('open', state.dockOpen);
   $('scrim').hidden = !state.dockOpen;
   const tray = $('tray');
   tray.hidden = !state.dockOpen;
-  if (!state.dockOpen) return;
+  $('dockSheet').hidden = !state.dockOpen;
+  if (!state.dockOpen) {
+    // a picked "To" lasts while you write; closed with nothing typed, the next open starts fresh
+    if (!(state.drafts.get('dock') || '').trim()) state.dockTarget = '';
+    return;
+  }
 
   const now = Date.now();
   const all = [...state.projects.values()];
@@ -699,26 +878,47 @@ function renderDock() {
   const active = all.filter(isActive).sort((a, b) => rank(b) - rank(a));
   const quiet = all.filter((p) => !isActive(p)).sort((a, b) => rank(b) - rank(a));
 
-  const go = (hash) => {
-    state.dockOpen = false;
+  const target = dockTargetFor(scope, by);
+  const go = (hash, { stay = false } = {}) => {
+    state.dockOpen = stay;
     if (location.hash === hash || (hash === '#/' && (location.hash === '' || location.hash === '#/feed'))) renderDock();
-    else location.hash = hash;
+    else {
+      state.keepDockOpen = stay;
+      location.hash = hash;
+    }
   };
-  const pill = (label, hash, { c, n, current, cls = '', live } = {}) =>
+  // Tapping a project shows its feed behind the tray and makes it the "To" of the text window, which
+  // stays up (with anything already typed), so choosing where to send never closes what you are writing.
+  const pick = (name, hash) => {
+    // tapping the pill takes the focus first, so "were you writing" is whether you just left the text box
+    state.refocusDock = (state.drafts.get('dock') || '').trim() !== '' && Date.now() - (state.dockBlurAt || 0) < 1500;
+    state.dockTarget = name;
+    go(hash, { stay: true });
+  };
+  const pill = (label, hash, { c, n, u, current, cls = '', live, name } = {}) =>
     h(
       'button',
-      { class: `dk-pill ${cls}`, type: 'button', role: 'menuitem', 'aria-current': current ? 'true' : 'false', style: c ? `--c:${c}` : '', onclick: () => go(hash) },
+      {
+        class: `dk-pill ${cls}${name && name === target ? ' target' : ''}`,
+        type: 'button',
+        role: 'menuitem',
+        'aria-current': current ? 'true' : 'false',
+        'data-name': name || null,
+        style: c ? `--c:${c}` : '',
+        onclick: () => (name ? pick(name, hash) : go(hash, { stay: cls === 'all' })),
+      },
       c ? h('span', { class: `dot${live ? ' live' : ''}` }) : null,
       h('span', { class: 'lbl', text: label }),
-      n ? h('span', { class: 'n', text: String(n) }) : null
+      u ? h('span', { class: 'u', title: `${u} unread`, text: String(u) }) : null,
+      n ? h('span', { class: 'n', title: `${n} need you`, text: String(n) }) : null
     );
 
   const keep = tray.scrollTop;
   tray.replaceChildren(
     ...[
     // nearest the thumb: everything, and the plans overview
-    h('div', { class: 'dk-row' }, pill('All', '#/', { current: !scope && state.route.page === 'feed', n: totalNeeds, cls: 'all' }), pill('Plans', '#/projects', { current: state.route.page === 'home', cls: 'plans' })),
-    ...active.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], current: p.name === scope, live: p.last_ts && now - p.last_ts < LIVE_MS })),
+    h('div', { class: 'dk-row' }, pill('All', '#/', { current: !scope && state.route.page === 'feed', n: totalNeeds, u: totalUnread, cls: 'all' }), pill('Plans', '#/projects', { current: state.route.page === 'home', cls: 'plans' })),
+    ...active.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], u: unreadBy[p.name], current: p.name === scope, live: p.last_ts && now - p.last_ts < LIVE_MS, name: p.name })),
     quiet.length
       ? h('button', {
           class: 'dk-pill more',
@@ -732,10 +932,84 @@ function renderDock() {
           },
         })
       : null,
-    ...(state.showQuiet ? quiet.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], current: false, cls: 'quiet' })) : [])
+    ...(state.showQuiet ? quiet.map((p) => pill(p.name, feedHref(p.name), { c: color(p.name), n: by[p.name], u: unreadBy[p.name], current: false, cls: 'quiet', name: p.name })) : [])
   ].filter(Boolean)
   );
   tray.scrollTop = keep;
+  // the text window is a sheet along the bottom edge, apart from the project list, which scrolls on its own
+  const sheet = $('dockSheet');
+  sheet.replaceChildren(...(target ? [dockCompose(target)] : []));
+  sheet.hidden = !target;
+  sizeSheet();
+  if (state.refocusDock && target) {
+    state.refocusDock = false;
+    sheet.querySelector('[data-draft="dock"]')?.focus();
+  }
+}
+// the buzzer and its project list sit just above the sheet, however tall the text gets
+function sizeSheet() {
+  const sheet = $('dockSheet');
+  document.documentElement.style.setProperty('--sheet-h', `${sheet.hidden ? 0 : sheet.offsetHeight}px`);
+}
+
+// Who the buzzer's text window sends to: the project you picked, else the one you are looking at,
+// else an agent that is waiting on you, else the project with the latest activity.
+function dockTargetFor(scope, needsBy) {
+  const has = (n) => n && state.projects.has(n);
+  if (has(state.dockTarget)) return state.dockTarget;
+  if (has(scope)) return scope;
+  const waiting = [...state.events.values()].filter((e) => e.needs_you && !e.resolved).sort((a, b) => b.id - a.id)[0];
+  if (waiting && needsBy[waiting.project]) return waiting.project;
+  return [...state.projects.values()].sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0))[0]?.name || '';
+}
+
+// The text window in the buzzer's tray. It answers the agent waiting on you in that project if there
+// is one, else leaves a note for the project's agents. Enter sends; Shift+Enter is a new line.
+function dockCompose(project) {
+  const need = [...state.events.values()].filter((e) => e.needs_you && !e.resolved && e.project === project && e.session_id).sort((a, b) => b.id - a.id)[0];
+  const ta = draftField('textarea', 'dock', { rows: '1', placeholder: need ? `Answer ${project}…` : `Message ${project}…`, 'aria-label': need ? `Answer ${project}: ${need.summary}` : `Message for the agents on ${project}` });
+  const fit = () => {
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
+    sizeSheet();
+  };
+  const send = async () => {
+    const prompt = ta.value.trim();
+    if (!prompt) return;
+    const path = need ? `/api/events/${need.id}/reply` : `/api/projects/${encodeURIComponent(project)}/reply`;
+    const row = await api(path, { method: 'POST', body: JSON.stringify({ prompt }) });
+    state.replies.set(row.id, row);
+    state.drafts.delete('dock');
+    state.leftoff.delete(project);
+    state.dockTarget = '';
+    state.dockOpen = false;
+    toast(`Sent to ${project}`);
+    render();
+  };
+  ta.addEventListener('input', () => {
+    fit();
+  });
+  ta.addEventListener('blur', () => (state.dockBlurAt = Date.now()));
+  ta.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault();
+      send();
+    }
+  });
+  requestAnimationFrame(fit);
+  return h(
+    'form',
+    {
+      class: 'dk-compose',
+      style: `--c:${color(project)}`,
+      onsubmit: (ev) => {
+        ev.preventDefault();
+        send();
+      },
+    },
+    h('div', { class: 'dk-to' }, h('span', { text: need ? 'Answer' : 'To' }), h('span', { class: 'dot' }), h('b', { text: project })),
+    h('div', { class: 'dk-field' }, ta, h('button', { type: 'submit', class: 'dk-send', 'aria-label': `Send to ${project}`, title: `Send to ${project}` }, icon('send')))
+  );
 }
 
 function dockIcon() {
@@ -776,9 +1050,10 @@ function needsLane(project) {
           'div',
           { class: 'txt' },
           h('a', { class: 'who', href: feedHref(e.project), text: `${e.project} · ${e.agent || e.harness} · ${ago(e.ts)}` }),
-          h('div', { class: 'what' }, renderInline(e.summary))
+          h('div', { class: 'what' }, renderInline(e.summary)),
+          answerChips(e)
         ),
-        h('button', { class: 'act primary', type: 'button', onclick: () => resolve(e.id), text: 'Handled' })
+        h('button', { class: 'act primary', type: 'button', onclick: () => resolve(e.id, { advance: true }), text: 'Handled' })
       )
     )
   );
@@ -790,7 +1065,9 @@ const projectNotes = (name) => [...state.replies.values()].filter((r) => !r.sess
 const replySig = (list) => list.map((r) => `${r.id}${r.delivered ? 'd' : 'w'}${r.delivered ? ago(r.delivered_ts) : ''}`).join(',');
 
 function messageLine(r) {
-  const state_ = r.delivered ? `Delivered ${ago(r.delivered_ts)}${ago(r.delivered_ts) === 'now' ? '' : ' ago'}` : 'Waiting for the agent';
+  // like a messaging app: one grey tick when sent, two green ones once the agent has it
+  const when = r.delivered ? ago(r.delivered_ts) : '';
+  const state_ = r.delivered ? `✓✓ Read by the agent · ${when === 'now' ? 'just now' : `${when} ago`}` : '✓ Sent · not read yet';
   return h(
     'div',
     { class: `msg ${r.delivered ? 'sent' : 'wait'}` },
@@ -807,66 +1084,34 @@ function repliesLabel(list) {
   return `${list.length} ${list.length === 1 ? 'reply' : 'replies'}${waiting ? ` · ${list.length === 1 ? '' : `${waiting} `}waiting` : ''}`;
 }
 
-function renderPost({ key, head, latest, rest }) {
+// A post is quiet: who, what, when, and one light row of counts. Everything behind a count (the
+// answers, your replies, earlier updates, the reply box, the agent's full message) slides up in a sheet.
+function renderPost(t) {
+  const { key, head, latest, rest } = t;
   const live = Date.now() - latest.ts < LIVE_MS;
-  const open = state.expanded.has(key);
   const replies = repliesFor(head);
-  const repliesOpen = state.expanded.has(`${key}:replies`);
   const url = safeUrl(head.url);
+  const waitingOn = (head.kind === 'blocked' || head.needs_you) && !head.resolved;
 
-  const text = h('p', { class: 'text' });
+  const text = h('p', { class: `text${head.body ? ' has-body' : ''}`, onclick: head.body ? (ev) => !ev.target.closest('a') && openSheet('body', key) : null });
   if (head.kind !== 'progress' && head.kind !== 'note') {
     text.append(h('span', { class: `tag ${head.kind}`, text: KIND_LABEL[head.kind] || head.kind }));
   }
   text.append(renderInline(head.summary));
   if (url) text.append(' ', h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Open' }));
 
-  const acts = h('div', { class: 'acts' });
-  if (rest.length) {
-    acts.append(
-      h('button', {
-        class: 'act',
-        type: 'button',
-        'aria-expanded': String(open),
-        text: open ? 'Hide updates' : `${rest.length} ${rest.length === 1 ? 'update' : 'updates'}`,
-        onclick: () => {
-          open ? state.expanded.delete(key) : state.expanded.add(key);
-          render();
-        },
-      })
-    );
-  }
-  if (replies.length) {
-    acts.append(
-      h('button', {
-        class: `act${!repliesOpen && replies.some((r) => !r.delivered) ? ' waiting' : ''}`,
-        type: 'button',
-        'aria-expanded': String(repliesOpen),
-        text: repliesOpen ? 'Hide replies' : repliesLabel(replies),
-        onclick: () => {
-          repliesOpen ? state.expanded.delete(`${key}:replies`) : state.expanded.add(`${key}:replies`);
-          render();
-        },
-      })
-    );
-  }
-  if (head.session_id) {
-    acts.append(
-      h('button', {
-        class: 'act',
-        type: 'button',
-        text: 'Reply',
-        onclick: () => {
-          state.composing.has(key) ? state.composing.delete(key) : state.composing.add(key);
-          render();
-        },
-      })
-    );
-  }
+  const counts = [
+    waitingOn ? emojiButton('explain', 'Answer', { class: 'ebtn amber', 'aria-label': 'Answer', onclick: () => openSheet('answers', key) }) : null,
+    replies.length
+      ? emojiButton('chat', String(replies.length), { class: `ebtn${replies.some((r) => !r.delivered) ? ' amber' : ''}`, 'aria-label': repliesLabel(replies), title: repliesLabel(replies), onclick: () => openSheet('replies', key) })
+      : null,
+    rest.length ? emojiButton('updates', String(rest.length), { 'aria-label': `${rest.length} earlier ${rest.length === 1 ? 'update' : 'updates'}`, onclick: () => openSheet('updates', key) }) : null,
+    head.session_id ? emojiButton('reply', 'Reply', { onclick: () => openSheet('reply', key) }) : null,
+  ].filter(Boolean);
 
   return h(
     'li',
-    { class: 'post', style: `--c:${color(head.project)}` },
+    { class: `post${isUnread(t) ? ' unread' : ''}`, style: `--c:${color(head.project)}` },
     avatar(head.project, live),
     h(
       'div',
@@ -876,59 +1121,121 @@ function renderPost({ key, head, latest, rest }) {
         { class: 'head' },
         h('a', { class: 'proj-link', href: feedHref(head.project), text: head.project }),
         h('span', { class: 'meta', text: [...new Set([head.agent, head.harness].filter(Boolean))].join(' · ') }),
-        h('time', { datetime: new Date(head.ts).toISOString(), title: new Date(head.ts).toLocaleString(), text: ago(head.ts) })
+        h('time', { datetime: new Date(head.ts).toISOString(), title: new Date(head.ts).toLocaleString(), text: ago(head.ts) }),
+        h('button', { class: 'pmore', type: 'button', 'aria-label': 'More', title: 'More', onclick: () => openSheet('menu', key) }, icon('more'))
       ),
       text,
-      head.body ? bodyBlock(head, key) : null,
-      acts,
-      // Newest first, like the project notes: the box you type in, then your messages, then the
-      // earlier updates, so the latest of everything is right under your thumb.
-      state.composing.has(key) ? composer(head, key) : null,
-      replies.length && repliesOpen ? h('div', { class: 'msgs' }, ...[...replies].sort((x, y) => y.id - x.id).map(messageLine)) : null,
-      open
-        ? h(
-            'div',
-            { class: 'thread' },
-            rest.map((e) =>
-              h(
-                'div',
-                { class: 'reply-line' },
-                h('time', { text: ago(e.ts) }),
-                e.kind !== 'progress' && e.kind !== 'note' ? h('span', { class: `tag ${e.kind}`, text: KIND_LABEL[e.kind] }) : null,
-                renderInline(e.summary)
-              )
-            )
-          )
-        : null
+      counts.length ? h('div', { class: 'quick prow', role: 'group', 'aria-label': 'Post' }, ...counts) : null
     )
   );
 }
 
-// The agent's longer message, as Markdown. Long ones are folded so the feed keeps moving; tap to unfold.
-function bodyBlock(head, key) {
-  const long = head.body.length > 360 || head.body.split('\n').length > 7;
-  const open = state.expanded.has(`${key}:body`);
-  return h(
-    'div',
-    { class: 'bodywrap' },
-    h('div', { class: `body md${long && !open ? ' clamp' : ''}` }, renderMarkdown(head.body)),
-    long
-      ? h('button', {
-          class: 'more-btn',
-          type: 'button',
-          'aria-expanded': String(open),
-          text: open ? 'Show less' : 'Show more',
-          onclick: () => {
-            open ? state.expanded.delete(`${key}:body`) : state.expanded.add(`${key}:body`);
-            render();
-          },
-        })
-      : null
+// ----- the sheet a post's details slide up in -----
+function openSheet(kind, key) {
+  state.sheet = { kind, key };
+  state.dockOpen = false;
+  render();
+  if (kind === 'reply') document.querySelector('#postSheet textarea')?.focus();
+}
+function closeSheet() {
+  if (!state.sheet) return;
+  state.sheet = null;
+  render();
+}
+function sheetRow(iconName, label, { right = '', cls = '', onclick } = {}) {
+  return h('button', { class: `ps-row ${cls}`, type: 'button', onclick }, icon(iconName), h('span', { class: 'ps-label', text: label }), right ? h('span', { class: 'ps-right', text: right }) : null);
+}
+function renderSheet() {
+  const layer = $('postSheet');
+  const sh = state.sheet;
+  const t = sh && postIndex.get(sh.key);
+  if (!t) {
+    layer.hidden = true;
+    layer.replaceChildren();
+    return;
+  }
+  const { key, head, rest } = t;
+  const replies = repliesFor(head);
+  const waitingOn = (head.kind === 'blocked' || head.needs_you) && !head.resolved;
+  const go = (kind) => () => openSheet(kind, key);
+  const answerRows = () =>
+    suggestions(head.summary, head.body || '').map((s) =>
+      sheetRow(s.icon, s.word, {
+        // the full message it sends, unless that only repeats the word
+        right: s.reply.replace(/[.\s]+$/, '').toLowerCase() === s.word.toLowerCase() ? '' : s.reply,
+        cls: 'amber',
+        onclick: () => {
+          state.sheet = null;
+          answer(head, s.reply);
+        },
+      })
+    );
+  const handledRow = () =>
+    sheetRow('yes', 'Mark handled', {
+      onclick: () => {
+        state.sheet = null;
+        resolve(head.id, { advance: true });
+      },
+    });
+  let title = '';
+  let content;
+  if (sh.kind === 'answers') {
+    title = 'Answer';
+    content = [...answerRows(), sheetRow('reply', 'Write an answer', { onclick: go('reply') }), handledRow()];
+  } else if (sh.kind === 'replies') {
+    title = repliesLabel(replies);
+    content = [h('div', { class: 'msgs' }, ...[...replies].sort((x, y) => y.id - x.id).map(messageLine)), sheetRow('reply', 'Reply', { onclick: go('reply') })];
+  } else if (sh.kind === 'updates') {
+    title = `${rest.length} earlier ${rest.length === 1 ? 'update' : 'updates'}`;
+    content = [
+      h(
+        'div',
+        { class: 'thread' },
+        rest.map((e) =>
+          h('div', { class: 'reply-line' }, h('time', { text: ago(e.ts) }), e.kind !== 'progress' && e.kind !== 'note' ? h('span', { class: `tag ${e.kind}`, text: KIND_LABEL[e.kind] }) : null, renderInline(e.summary))
+        )
+      ),
+    ];
+  } else if (sh.kind === 'body') {
+    title = 'Full message';
+    content = [h('div', { class: 'body md' }, renderMarkdown(head.body || ''))];
+  } else if (sh.kind === 'reply') {
+    title = 'Reply';
+    content = [composer(head, key)];
+  } else {
+    title = 'More';
+    content = [
+      ...(waitingOn ? answerRows() : []),
+      head.session_id ? sheetRow('reply', 'Reply', { onclick: go('reply') }) : null,
+      replies.length ? sheetRow('chat', 'Your replies', { right: repliesLabel(replies), onclick: go('replies') }) : null,
+      rest.length ? sheetRow('updates', 'Earlier updates', { right: String(rest.length), onclick: go('updates') }) : null,
+      head.body ? sheetRow('doc', 'Full message', { onclick: go('body') }) : null,
+      waitingOn ? handledRow() : null,
+      sheetRow('open', `Open ${head.project}`, {
+        onclick: () => {
+          state.sheet = null;
+          location.hash = feedHref(head.project);
+        },
+      }),
+    ].filter(Boolean);
+  }
+  layer.hidden = false;
+  layer.replaceChildren(
+    h('div', { class: 'ps-dim', onclick: closeSheet }),
+    h(
+      'div',
+      { class: 'ps-sheet', role: 'dialog', 'aria-label': `${head.project}: ${title}` },
+      h('div', { class: 'ps-grab' }),
+      h('div', { class: 'ps-head' }, h('b', { text: title }), h('span', { class: 'ps-sub', text: ` · ${head.project}` }), h('button', { class: 'ps-close', type: 'button', 'aria-label': 'Close', onclick: closeSheet }, icon('no'))),
+      h('p', { class: 'ps-about', text: head.summary }),
+      ...content
+    )
   );
 }
 
 function composer(head, key) {
   const ta = draftField('textarea', `reply:${key}`, { placeholder: 'Message for this agent', 'aria-label': 'Message for this agent', rows: '2' });
+  const waiting = head.needs_you && !head.resolved;
   return h(
     'form',
     {
@@ -941,21 +1248,177 @@ function composer(head, key) {
         state.replies.set(row.id, row);
         state.drafts.delete(`reply:${key}`);
         state.composing.delete(key);
-        state.expanded.add(`${key}:replies`); // show what you just sent
-        render();
+        state.leftoff.delete(head.project);
+        state.sheet = null;
+        toast(`Sent to ${head.project}`);
+        if (ev.submitter?.value === 'handled') await resolve(head.id, { advance: true });
+        else render();
       },
     },
     ta,
-    h('p', { class: 'hint', text: state.wake ? 'If the agent is idle, it is woken up to handle this.' : 'Delivered when the agent next starts or finishes a turn. To wake idle agents: ./buzz wake on' }),
-    h('button', { type: 'submit', text: 'Send' })
+    quickChips(ta, `reply:${key}`),
+    h('span', { class: 'spacer' }),
+    waiting ? h('button', { type: 'submit', value: 'handled', class: 'secondary', title: 'Send, and mark it handled', 'aria-label': 'Send, and mark it handled', text: '✓ Handled' }) : null,
+    h('button', { type: 'submit', value: 'send', text: 'Send' })
   );
 }
 
-async function resolve(id) {
+// A small line icon and at most one word, light like "Reply". A row of them shrinks its words
+// before it would ever spill over, and never scrolls sideways.
+const ICONS = {
+  go: ['M5 12h14', 'M13 6l6 6-6 6'],
+  test: ['M9 3h6', 'M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3', 'M7.5 15h9'],
+  pr: ['M6 8.5v7', 'M18 15.5V10a3 3 0 0 0-3-3h-4', 'M13 4.5L10.5 7 13 9.5', 'C6 6 2.2', 'C6 18 2.2', 'C18 18 2.2'],
+  explain: ['C12 12 9', 'M9.6 9.2a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5', 'M12 16.8h.01'],
+  stop: ['C12 12 9', 'M9.5 9.5h5v5h-5z'],
+  yes: ['M5 12.5l4.5 4.5L19 7'],
+  right: ['M10 6l6 6-6 6'],
+  chat: ['M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-8.5l-4.5 3.5v-3.5h-1A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5z'],
+  updates: ['M4.5 12a7.5 7.5 0 1 0 2.2-5.3', 'M4.5 4.5v3.7h3.7'],
+  reply: ['M10 7.5L5 12l5 4.5', 'M5.5 12H14a5 5 0 0 1 5 5v1'],
+  more: ['C5.5 12 1.2', 'C12 12 1.2', 'C18.5 12 1.2'],
+  doc: ['M7 3.5h7l4 4V20.5H7z', 'M13.5 3.5V8H18', 'M9.5 12.5h5', 'M9.5 16h5'],
+  open: ['M14 4.5h5.5V10', 'M19.5 4.5l-8 8', 'M18 14v5.5H4.5V6H10'],
+  down: ['M6 10l6 6 6-6'],
+  send: ['M12 19V5', 'M6 11l6-6 6 6'],
+  no: ['M6.5 6.5l11 11', 'M17.5 6.5l-11 11'],
+};
+function icon(name) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const add = (tag, attrs) => {
+    const el = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    svg.append(el);
+  };
+  const n = /^n(\d)$/.exec(name);
+  if (n) {
+    add('circle', { cx: 12, cy: 12, r: 9 });
+    const t = document.createElementNS(ns, 'text');
+    for (const [k, v] of Object.entries({ x: 12, y: 16, 'text-anchor': 'middle', class: 'num' })) t.setAttribute(k, v);
+    t.textContent = n[1];
+    svg.append(t);
+    return svg;
+  }
+  for (const d of ICONS[name] || []) {
+    if (d.startsWith('C')) {
+      const [cx, cy, r] = d.slice(1).trim().split(' ');
+      add('circle', { cx, cy, r });
+    } else add('path', { d });
+  }
+  return svg;
+}
+function emojiButton(iconName, word, props) {
+  return h('button', { class: 'ebtn', type: 'button', ...props }, icon(iconName), h('span', { class: 'wd', text: word }));
+}
+const buttonRow = (cls, label, buttons) => h('div', { class: cls, role: 'group', 'aria-label': label, style: `--n:${buttons.length}` }, ...buttons);
+
+// Things you often say, under a text box: a tap adds one to what you are typing.
+function quickChips(ta, draftKey) {
+  return buttonRow(
+    'quick',
+    'Quick replies',
+    QUICK_REPLIES.map((q) =>
+      emojiButton(q.icon, q.word, {
+        title: q.text,
+        'aria-label': q.text,
+        onclick: () => {
+          const now = ta.value.trim();
+          ta.value = `${now ? `${now}${/[.!?]$/.test(now) ? '' : '.'} ` : ''}${q.text}.`;
+          state.drafts.set(draftKey, ta.value);
+          ta.focus();
+        },
+      })
+    )
+  );
+}
+
+// ----- one-tap answers -----
+// An agent waiting on you often asks a question with its own answers in it ("Grams or cups?").
+// They become buttons. A tap sends after a short pause you can undo, marks the item handled and
+// moves you on to the next agent that is waiting, like working through an inbox.
+const pendingAnswers = new Map(); // event id -> timer
+function answerChips(e) {
+  if (!e || e.resolved) return null;
+  const pending = pendingAnswers.has(e.id);
+  return buttonRow(
+    'answers',
+    'Quick answers',
+    suggestions(e.summary, e.body || '').map((s) => emojiButton(s.icon, s.word, { disabled: pending, title: s.reply, 'aria-label': `${s.word}: ${s.reply}`, onclick: () => answer(e, s.reply) }))
+  );
+}
+function answer(e, reply) {
+  if (pendingAnswers.has(e.id)) return;
+  const send = async () => {
+    pendingAnswers.delete(e.id);
+    try {
+      const path = e.session_id ? `/api/events/${e.id}/reply` : `/api/projects/${encodeURIComponent(e.project)}/reply`;
+      const row = await api(path, { method: 'POST', body: JSON.stringify({ prompt: reply }) });
+      state.replies.set(row.id, row);
+      if (e.needs_you && !e.resolved) await resolve(e.id, { advance: true });
+      else render();
+    } catch (err) {
+      toast(`Not sent: ${err.message}`);
+      render();
+    }
+  };
+  pendingAnswers.set(e.id, setTimeout(send, 2500));
+  render();
+  toast(`Sending “${reply}” to ${e.project}`, {
+    ms: 2500,
+    undo: () => {
+      clearTimeout(pendingAnswers.get(e.id));
+      pendingAnswers.delete(e.id);
+      render();
+    },
+  });
+}
+
+let toastTimer = 0;
+function toast(text, { undo, ms = 3000 } = {}) {
+  const el = $('toast');
+  el.replaceChildren(
+    ...[
+      h('span', { text }),
+      undo
+      ? h('button', {
+          type: 'button',
+          text: 'Undo',
+          onclick: () => {
+            clearTimeout(toastTimer);
+            el.hidden = true;
+            undo();
+          },
+        })
+      : null,
+    ].filter(Boolean)
+  );
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.hidden = true), ms);
+}
+
+// After you deal with one agent, bring the next one that is waiting into view.
+function moveToNextNeed() {
+  const rows = [...document.querySelectorAll('#view .need')];
+  if (!rows.length) return toast('All clear: no agent is waiting on you');
+  const next = rows[0];
+  const r = next.getBoundingClientRect();
+  if (r.top < 60 || r.bottom > innerHeight - 80) next.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  next.classList.add('next');
+  setTimeout(() => next.classList.remove('next'), 1600);
+  toast(rows.length === 1 ? '1 more agent needs you' : `${rows.length} more agents need you`);
+}
+
+async function resolve(id, { advance = false } = {}) {
   const row = await api(`/api/events/${id}/resolve`, { method: 'POST' });
   state.events.set(row.id, row);
+  state.leftoff.delete(row.project); // its next action may have been this one
   scheduleRefresh();
   render();
+  if (advance) moveToNextNeed();
 }
 
 // ---------- project dialog ----------
@@ -1007,6 +1470,7 @@ function connect() {
   es.addEventListener('event', (m) => {
     const ev = JSON.parse(m.data);
     ingest(ev);
+    state.leftoff.delete(ev.project); // its "where you left off" is out of date
     scheduleRefresh();
     if (scrollY > 400 && state.route.page !== 'home') {
       state.unseen++;
@@ -1073,21 +1537,20 @@ keys = installShortcuts({
     if (location.hash !== hash) location.hash = hash;
   },
   toggleExpand(key) {
-    state.expanded.has(key) ? state.expanded.delete(key) : state.expanded.add(key);
-    render();
+    if (state.sheet?.key === key) return closeSheet();
+    const t = postIndex.get(key);
+    openSheet(t?.rest.length ? 'updates' : 'menu', key);
   },
   reply(key) {
-    state.composing.add(key);
-    render();
-    postSel(key)?.querySelector('.composer textarea')?.focus();
+    openSheet('reply', key);
   },
-  closeComposer(textarea) {
-    const key = textarea.closest('.post')?.dataset.k;
-    if (key && state.composing.delete(key)) render();
+  closeComposer() {
+    closeSheet();
   },
+  sheetOpen: () => Boolean(state.sheet),
   resolve(key) {
     const id = this.postInfo(key)?.needId;
-    if (id) resolve(id);
+    if (id) resolve(id, { advance: true });
   },
   toggleQuiet: () => !$('quiet').hidden && $('quiet').click(),
   toggleDock,

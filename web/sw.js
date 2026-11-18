@@ -1,6 +1,6 @@
 // Caches the app shell only. Event data always comes from the network.
-const CACHE = 'buzz-shell-v4'; // v4: both avatar.js and keys.js
-const SHELL = ['/', '/style.css', '/app.js', '/md.js', '/avatar.js', '/keys.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE = 'buzz-shell-v14'; // v14: quiet posts, details in a sheet
+const SHELL = ['/', '/style.css', '/app.js', '/md.js', '/avatar.js', '/keys.js', '/suggest.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
