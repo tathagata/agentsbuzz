@@ -980,6 +980,7 @@ function dockCompose(project) {
     const row = await api(path, { method: 'POST', body: JSON.stringify({ prompt }) });
     state.replies.set(row.id, row);
     state.drafts.delete('dock');
+    state.leftoff.delete(project);
     state.dockTarget = '';
     state.dockOpen = false;
     toast(`Sent to ${project}`);
@@ -1247,6 +1248,7 @@ function composer(head, key) {
         state.replies.set(row.id, row);
         state.drafts.delete(`reply:${key}`);
         state.composing.delete(key);
+        state.leftoff.delete(head.project);
         state.sheet = null;
         toast(`Sent to ${head.project}`);
         if (ev.submitter?.value === 'handled') await resolve(head.id, { advance: true });
@@ -1413,6 +1415,7 @@ function moveToNextNeed() {
 async function resolve(id, { advance = false } = {}) {
   const row = await api(`/api/events/${id}/resolve`, { method: 'POST' });
   state.events.set(row.id, row);
+  state.leftoff.delete(row.project); // its next action may have been this one
   scheduleRefresh();
   render();
   if (advance) moveToNextNeed();

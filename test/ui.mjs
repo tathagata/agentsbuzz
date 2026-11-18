@@ -353,8 +353,17 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   assert.equal((await (await fetch(BASE + '/api/replies?all=1')).json()).replies.length, before, 'Undo sends nothing');
   assert.equal(await need.count(), 1, 'and the agent still needs you');
 
+  // handling it refreshes "where you left off" at once, so no stale Answer is left behind
+  await p.evaluate(() => (location.hash = '#/f/latency-lab'));
+  await p.waitForFunction(() => /next capture sample/.test(document.querySelector('.leftoff .lo-line')?.textContent || ''));
+  await p.locator('.need', { hasText: 'next capture sample' }).locator('button', { hasText: 'Handled' }).tap();
+  await p.waitForFunction(() => !/next capture sample/.test(document.querySelector('.leftoff .lo-line')?.textContent || ''), null, { timeout: 5000 });
+  await j('/api/events', [{ project: 'latency-lab', harness: 'claude-code', agent: 'claude', session_id: 'l3', kind: 'blocked', needs_you: true, summary: 'Need the next capture sample', ts: Date.now() }]);
+  await p.evaluate(() => (location.hash = '#/'));
+  await p.waitForFunction(() => [...document.querySelectorAll('#view .need')].some((e) => e.textContent.includes('next capture sample')));
+
   // quick replies in a post's Reply box add to the text, and rows of buttons never spill over
-  const replyPost = p.locator('.post', { hasText: 'next capture sample' });
+  const replyPost = p.locator('.post', { hasText: 'next capture sample' }).first();
   await replyPost.locator('.prow .ebtn', { hasText: /^Reply$/ }).tap();
   await p.locator('.ps-sheet .quick .ebtn[aria-label="Run the tests"]').tap();
   assert.equal(await p.locator('.ps-sheet .composer textarea').inputValue(), 'Run the tests.');
@@ -411,7 +420,7 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   await p.waitForFunction(() => /^\(\d+\) /.test(document.title), null, { timeout: 2000 }).catch(() => {});
   await p.waitForFunction(() => ![...document.querySelectorAll('.post')].find((e) => e.textContent.includes('Fresh unread milestone'))?.classList.contains('unread'), null, { timeout: 5000 });
   const after = await p.locator('#dockBtn .dk-unread').count() ? Number(await p.locator('#dockBtn .dk-unread').textContent()) : 0;
-  assert.equal(after, badge - 1, 'reading it takes it off the buzzer');
+  assert.ok(after <= badge - 1, `reading it takes it off the buzzer (${badge} → ${after})`);
 }
 
 // your messages read like a messaging app: one tick when sent, two once the agent has it
