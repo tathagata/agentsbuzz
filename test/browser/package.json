@@ -3,6 +3,6 @@
   "description": "Test-only tooling for test/ui.mjs and test/smooth.mjs. The app itself has no dependencies.",
   "private": true,
   "devDependencies": {
-    "playwright": "1.65.0"
+    "playwright": "1.65.1"
   }
 }
