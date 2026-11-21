@@ -1,7 +1,7 @@
 # agentsbuzz: feed server, web app and collector in one image (two services in compose).
 # Needs Node 22.13+ (built-in node:sqlite without a flag); node:24-slim is current 24.x.
 # Pinned by digest so a build always starts from the image that was reviewed; Dependabot proposes updates.
-FROM node:24-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9
+FROM node:26-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
