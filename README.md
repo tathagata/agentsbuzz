@@ -69,7 +69,7 @@ Your data lives in `~/.agentsbuzz`, readable only by you.
 
 **On your phone:** the round button at the bottom right (the buzzer) shows who needs you (amber) and what you have not read (blue). Tap it to switch project or to write to any agent: pick the project, type, send. Posts stay short; tap a count, the summary or **⋯** to see answers, replies, earlier updates or the agent's full message in a sheet. Add it to your home screen to use it like an app.
 
-**On a laptop:** press `?` for keyboard shortcuts. `j`/`k` move, `⌘K` jumps to any project, `r` replies, `e` marks something handled.
+**On a laptop:** press `?` for keyboard shortcuts. `j`/`k` move, `⌘K` jumps to any project, `r` replies, `m` writes to any agent, `e` marks something handled.
 
 **One-line install:** `curl -fsSL https://raw.githubusercontent.com/tathagata/agentsbuzz/main/install.sh | bash` clones next to your other projects and starts it.
 
