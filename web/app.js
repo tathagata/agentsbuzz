@@ -254,6 +254,12 @@ function parseRoute() {
 const feedHref = (name) => (name ? `#/f/${encodeURIComponent(name)}` : '#/');
 
 async function onRoute() {
+  if (location.hash === '#/message') {
+    // the home-screen "Message" shortcut: the feed, with the text window open
+    history.replaceState(null, '', `${location.pathname}${location.search}#/`);
+    state.keepDockOpen = true;
+    state.refocusDock = true;
+  }
   state.navDepth += 1;
   state.route = parseRoute();
   state.feedProject = state.route.page === 'feed' ? state.route.name : '';
@@ -952,6 +958,16 @@ function sizeSheet() {
   document.documentElement.style.setProperty('--sheet-h', `${sheet.hidden ? 0 : sheet.offsetHeight}px`);
 }
 
+// The buzzer's text window, open and ready to type in: the m key, and #/message (the home-screen
+// shortcut). With a project, it is addressed there; without, the usual "who to send to" applies.
+function openMessage(project) {
+  if (project && state.projects.has(project)) state.dockTarget = project;
+  state.sheet = null;
+  state.dockOpen = true;
+  state.refocusDock = true;
+  render();
+}
+
 // Who the buzzer's text window sends to: the project you picked, else the one you are looking at,
 // else an agent that is waiting on you, else the project with the latest activity.
 function dockTargetFor(scope, needsBy) {
@@ -1545,7 +1561,11 @@ keys = installShortcuts({
     openSheet('reply', key);
   },
   closeComposer() {
-    closeSheet();
+    if (state.sheet) closeSheet();
+    else if (state.dockOpen) toggleDock(false); // an empty buzzer text window: Esc closes it
+  },
+  message(project) {
+    openMessage(project);
   },
   sheetOpen: () => Boolean(state.sheet),
   resolve(key) {

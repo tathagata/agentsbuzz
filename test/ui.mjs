@@ -432,6 +432,22 @@ assert.equal(await p.locator('.tray:not([hidden])').count(), 0);
   await p.locator('.ps-close').tap();
 }
 
+// m brings up the buzzer's text window, ready to type; Esc on the empty box closes it again.
+// #/message (the home-screen "Message" shortcut) does the same on launch.
+{
+  await p.evaluate(() => (location.hash = '#/'));
+  await p.waitForSelector('#view .post');
+  await p.keyboard.press('m');
+  await p.waitForFunction(() => document.activeElement?.dataset?.draft === 'dock');
+  assert.equal(await p.locator('#dockSheet:not([hidden])').count(), 1, 'm opens the text window');
+  await p.keyboard.press('Escape');
+  assert.equal(await p.locator('#tray:not([hidden])').count(), 0, 'Esc on the empty box closes it');
+  await p.evaluate(() => (location.hash = '#/message'));
+  await p.waitForFunction(() => document.activeElement?.dataset?.draft === 'dock');
+  assert.equal(await p.evaluate(() => location.hash), '#/', 'the shortcut link lands on the feed');
+  await p.keyboard.press('Escape');
+}
+
 assert.deepEqual(errs, []);
 assert.deepEqual(cspViolations, [], 'the app must work under its Content-Security-Policy');
 console.log('PASS');
